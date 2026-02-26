@@ -5,3 +5,10 @@ pytrends==4.9.3
 httpx==0.28.1
 structlog==24.4.0
 pydantic==2.10.4
+# Sprint 2: AI Pipeline
+openai>=1.12.0
+anthropic>=0.49.0
+numpy>=1.26.0
+scikit-learn>=1.4.0
+hdbscan>=0.8.38
+upstash-redis>=1.0.0
