@@ -8,14 +8,17 @@ import { TimeAgo } from "@/components/time-ago";
 
 export const revalidate = 300;
 
+const TOPIC_COLUMNS =
+  "id, slug, title, summary, summary_status, heat_score, total_engagement, source_count, post_count, sentiment_positive, sentiment_negative, sentiment_neutral, status, platforms_json, last_updated_at, report_count, flags";
+
+const MIN_TOPICS_THRESHOLD = 10;
+
 async function getTopics(platform?: string): Promise<Topic[]> {
   const supabase = createServerClient();
 
   let query = supabase
     .from("topics")
-    .select(
-      "id, slug, title, summary, summary_status, heat_score, total_engagement, source_count, post_count, sentiment_positive, sentiment_negative, sentiment_neutral, status, platforms_json, last_updated_at, report_count, flags"
-    )
+    .select(TOPIC_COLUMNS)
     .in("status", ["emerging", "rising", "peak"])
     .is("canonical_id", null)
     .lt("report_count", 5)
@@ -33,10 +36,32 @@ async function getTopics(platform?: string): Promise<Topic[]> {
     return [];
   }
 
-  // Filter out suspected_spam in JS since array contains is simpler here
-  return (data as Topic[]).filter(
+  let topics = (data as Topic[]).filter(
     (t) => !t.flags?.includes("suspected_spam")
   );
+
+  // Fallback: if < MIN_TOPICS, relax conditions (include declining, source_diversity >= 1)
+  if (topics.length < MIN_TOPICS_THRESHOLD && !platform) {
+    const existingIds = new Set(topics.map((t) => t.id));
+
+    const { data: fallbackData } = await supabase
+      .from("topics")
+      .select(TOPIC_COLUMNS)
+      .in("status", ["emerging", "rising", "peak", "declining"])
+      .is("canonical_id", null)
+      .lt("report_count", 5)
+      .order("heat_score", { ascending: false })
+      .limit(50);
+
+    if (fallbackData) {
+      const fallbackTopics = (fallbackData as Topic[]).filter(
+        (t) => !t.flags?.includes("suspected_spam") && !existingIds.has(t.id)
+      );
+      topics = [...topics, ...fallbackTopics].slice(0, 50);
+    }
+  }
+
+  return topics;
 }
 
 export default async function HomePage({
