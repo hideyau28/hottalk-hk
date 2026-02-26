@@ -9,12 +9,18 @@ const PLACEHOLDER_KEY = "placeholder";
  * Returns a client even when env vars are missing (build-time safe).
  */
 export function createServerClient(): SupabaseClient {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || PLACEHOLDER_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || PLACEHOLDER_KEY;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  return createClient(url, key, {
+  // Build-time safe: if env vars are missing, return a client pointing at a
+  // placeholder URL. Callers should treat fetch failures as "no data".
+  return createClient(url || PLACEHOLDER_URL, key || PLACEHOLDER_KEY, {
     auth: { persistSession: false },
   });
+}
+
+export function hasServerSupabaseEnv(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
 /**
