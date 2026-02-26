@@ -1,4 +1,4 @@
-import { notFound, redirect } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import type { Metadata } from "next";
 import { createServerClient } from "@/lib/supabase";
 import type { Topic, RawPost, TopicAlias } from "@/lib/types";
@@ -34,7 +34,7 @@ async function getTopicBySlug(slug: string) {
       .single();
 
     if (canonical) {
-      redirect(`/topic/${canonical.slug}`);
+      permanentRedirect(`/topic/${canonical.slug}`);
     }
   }
 
