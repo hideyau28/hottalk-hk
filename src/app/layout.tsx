@@ -53,8 +53,24 @@ export default function RootLayout({
         </header>
         <main className="mx-auto max-w-5xl px-4 py-6">{children}</main>
         <footer className="border-t border-zinc-200 dark:border-zinc-800">
-          <div className="mx-auto max-w-5xl px-4 py-6 text-center text-sm text-zinc-500">
-            &copy; 2026 HotTalk HK
+          <div className="mx-auto max-w-5xl px-4 py-6">
+            <nav className="flex flex-wrap justify-center gap-4 text-sm text-zinc-500">
+              <Link href="/about" className="hover:text-zinc-700 dark:hover:text-zinc-300">
+                關於我們
+              </Link>
+              <Link href="/privacy" className="hover:text-zinc-700 dark:hover:text-zinc-300">
+                私隱政策
+              </Link>
+              <Link href="/terms" className="hover:text-zinc-700 dark:hover:text-zinc-300">
+                使用條款
+              </Link>
+              <Link href="/report" className="hover:text-zinc-700 dark:hover:text-zinc-300">
+                舉報指引
+              </Link>
+            </nav>
+            <p className="mt-3 text-center text-sm text-zinc-400">
+              &copy; 2026 HotTalk HK
+            </p>
           </div>
         </footer>
       </body>
