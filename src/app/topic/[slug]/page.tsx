@@ -96,6 +96,8 @@ export async function generateMetadata({ params }: TopicPageProps): Promise<Meta
 
   const description = topic.meta_description ?? topic.summary?.slice(0, 160) ?? "";
 
+  const ogImageUrl = `https://hottalk.hk/api/og?topic=${encodeURIComponent(slug)}`;
+
   return {
     title: topic.title,
     description,
@@ -103,6 +105,13 @@ export async function generateMetadata({ params }: TopicPageProps): Promise<Meta
       title: topic.title,
       description,
       type: "article",
+      images: [{ url: ogImageUrl, width: 1200, height: 630 }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: topic.title,
+      description,
+      images: [ogImageUrl],
     },
     alternates: {
       canonical: `https://hottalk.hk/topic/${slug}`,
