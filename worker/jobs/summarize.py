@@ -21,6 +21,8 @@ from typing import Any
 import structlog
 from anthropic import AsyncAnthropic
 
+from worker.utils.alerting import check_llm_cost
+from worker.utils.monitoring import record_error, record_ok
 from worker.utils.sensitive_filter import check_sensitive
 from worker.utils.supabase_client import get_supabase_client
 
@@ -202,6 +204,13 @@ async def summarize_topics(topic_ids: list[str]) -> dict[str, int]:
             stats["skipped_cap"] += 1
             continue
 
+        # Check LLM cost threshold (hard stop / warning)
+        cost_status = await check_llm_cost()
+        if cost_status == "hard_stop":
+            logger.warning("llm_cost_hard_stop", topic_id=topic_id)
+            stats["skipped_cap"] += 1
+            break  # Stop all remaining summarizations
+
         # Fetch topic's posts
         posts_result = (
             supabase.table("topic_posts")
@@ -357,6 +366,12 @@ async def summarize_topics(topic_ids: list[str]) -> dict[str, int]:
             title=parsed.get("title", ""),
             keywords=keywords,
         )
+
+    # Record monitoring counters
+    if stats["summarized"] > 0:
+        await record_ok("summarize")
+    if stats["failed"] > 0:
+        await record_error("summarize", f"failed={stats['failed']}")
 
     logger.info("summarize_complete", **stats)
     return stats
