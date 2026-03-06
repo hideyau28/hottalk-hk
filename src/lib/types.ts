@@ -23,7 +23,15 @@ export type DegradationLevel = "L1" | "L2" | "L3";
 export type ReportStatus = "pending" | "reviewed" | "actioned" | "dismissed";
 
 /** Audit log actions */
-export type AuditAction = "merge" | "split" | "hide" | "restore" | "assign" | "manual_review";
+export type AuditAction =
+  | "merge"
+  | "split"
+  | "hide"
+  | "restore"
+  | "assign"
+  | "manual_review"
+  | "merge_suggestion"
+  | "new_topic_suggestion";
 
 // --- Database row types ---
 
@@ -177,6 +185,22 @@ export interface AuditLogEntry {
   actor: string;
   details: Record<string, unknown> | null;
   created_at: string;
+}
+
+export interface DailyBrief {
+  id: string;
+  brief_date: string;
+  tier: "free" | "pro";
+  content: {
+    topics: Array<{
+      rank: number;
+      title: string;
+      slug: string;
+      heat_score: number;
+      platforms: string[];
+    }>;
+  };
+  generated_at: string;
 }
 
 export interface SensitiveKeyword {

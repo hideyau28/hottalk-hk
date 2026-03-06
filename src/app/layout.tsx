@@ -46,9 +46,17 @@ export default function RootLayout({
                 熱話 HotTalk HK
               </span>
             </Link>
-            <span className="hidden text-sm text-zinc-500 sm:inline">
-              一頁睇晒，全港熱話
-            </span>
+            <div className="flex items-center gap-4">
+              <Link
+                href="/brief"
+                className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+              >
+                今日懶人包
+              </Link>
+              <span className="hidden text-sm text-zinc-500 sm:inline">
+                一頁睇晒，全港熱話
+              </span>
+            </div>
           </div>
         </header>
         <main className="mx-auto max-w-5xl px-4 py-6">{children}</main>

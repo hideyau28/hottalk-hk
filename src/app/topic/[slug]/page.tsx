@@ -6,6 +6,7 @@ import { HeatIndicator } from "@/components/heat-indicator";
 import { PlatformBadge } from "@/components/platform-badge";
 import { SentimentBar } from "@/components/sentiment-bar";
 import { ReportButton } from "@/components/report-button";
+import { ShareButtons } from "@/components/share-buttons";
 import { TimeAgo } from "@/components/time-ago";
 import type { Platform } from "@/lib/types";
 
@@ -206,10 +207,16 @@ export default async function TopicPage({ params }: TopicPageProps) {
           <TimeAgo date={topic.last_updated_at} />
         </div>
 
-        <div className="mt-3 flex flex-wrap gap-1">
-          {platforms.map(({ platform, count }) => (
-            <PlatformBadge key={platform} platform={platform} count={count} />
-          ))}
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap gap-1">
+            {platforms.map(({ platform, count }) => (
+              <PlatformBadge key={platform} platform={platform} count={count} />
+            ))}
+          </div>
+          <ShareButtons
+            url={`https://hottalk.hk/topic/${slug}`}
+            title={topic.title}
+          />
         </div>
 
         {topic.summary && topic.summary_status !== "hidden" && (

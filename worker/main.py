@@ -9,13 +9,13 @@ from fastapi import FastAPI, Request, Response
 
 from worker.collectors.google_trends import collect_google_trends
 from worker.jobs.incremental_assign import run_incremental_assign
+from worker.jobs.daily_brief import generate_daily_brief
 from worker.jobs.nightly_recluster import run_nightly_recluster
 from worker.utils.alerting import (
     check_and_alert_collector,
     check_lihkg_degradation,
     check_zero_topics,
 )
-from worker.utils.heat_score import update_platform_daily_stats
 from worker.utils.monitoring import record_error, record_ok
 from worker.utils.qstash_verify import verify_qstash_signature
 from worker.utils.supabase_client import get_supabase_client
@@ -180,7 +180,6 @@ async def job_nightly_recluster(request: Request) -> dict | Response:
         await check_and_alert_collector(collector, success=True)
         _finalize_job_run(run_id, start_time, "success", extra={
             "posts_fetched": result.get("total_posts", 0),
-            "posts_new": result.get("new_topics", 0),
         })
         logger.info("job_completed", job="nightly-recluster", result=result)
         return result
@@ -198,23 +197,27 @@ async def job_nightly_recluster(request: Request) -> dict | Response:
         return Response(content=f"Internal error: {e}", status_code=500)
 
 
-@app.post("/jobs/update-daily-stats")
-async def job_update_daily_stats(request: Request) -> dict | Response:
-    """Update platform daily stats — triggered daily at 04:00 HKT by QStash."""
+@app.post("/jobs/daily-brief")
+async def job_daily_brief(request: Request) -> dict | Response:
+    """Generate daily brief — triggered daily at 12:00 HKT by QStash."""
     is_valid = await verify_qstash_signature(request)
     if not is_valid:
         return Response(content="Unauthorized", status_code=401)
 
+    collector = "daily_brief"
     try:
         result = await asyncio.wait_for(
-            update_platform_daily_stats(),
+            generate_daily_brief(),
             timeout=JOB_TIMEOUT_SECONDS,
         )
-        logger.info("job_completed", job="update-daily-stats", result=result)
+        await record_ok(collector)
+        logger.info("job_completed", job="daily-brief", result=result)
         return result
     except asyncio.TimeoutError:
-        logger.error("job_timeout", job="update-daily-stats")
+        await record_error(collector, "Job timed out after 5 minutes")
+        logger.error("job_timeout", job="daily-brief")
         return Response(content="Job timed out", status_code=504)
     except Exception as e:
-        logger.error("job_failed", job="update-daily-stats", error=str(e), tb=traceback.format_exc())
+        await record_error(collector, str(e))
+        logger.error("job_failed", job="daily-brief", error=str(e), tb=traceback.format_exc())
         return Response(content=f"Internal error: {e}", status_code=500)
