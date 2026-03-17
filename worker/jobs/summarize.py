@@ -1,4 +1,4 @@
-"""Claude Haiku topic summarization job.
+"""Gemini Flash topic summarization job.
 
 Triggers:
 - New topic created
@@ -10,6 +10,7 @@ Hard cap: 500K tokens/day.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -19,7 +20,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import structlog
-from anthropic import AsyncAnthropic
+from google import genai
 
 from worker.utils.alerting import check_llm_cost
 from worker.utils.monitoring import record_error, record_ok
@@ -30,7 +31,7 @@ logger = structlog.get_logger()
 
 DAILY_TOKEN_CAP = 500_000
 REDIS_TOKEN_KEY_PREFIX = "hottalk:llm_tokens"
-MODEL = "claude-3-5-haiku-latest"
+MODEL = "gemini-2.0-flash"
 
 PROMPT_TEMPLATE = """你是香港社交媒體熱話分析師。以下是來自不同平台嘅帖文，全部講緊同一件事。
 
@@ -54,11 +55,8 @@ PROMPT_TEMPLATE = """你是香港社交媒體熱話分析師。以下是來自�
 - slug 用英文，全小寫，dash 分隔，唔加日期"""
 
 
-def _get_anthropic_client() -> AsyncAnthropic:
-    return AsyncAnthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        timeout=30.0,
-    )
+def _get_genai_client() -> genai.Client:
+    return genai.Client(api_key=os.environ["GOOGLE_AI_API_KEY"])
 
 
 async def _get_daily_token_usage() -> int:
@@ -182,12 +180,12 @@ async def _ensure_unique_slug(supabase: Any, slug: str) -> str:
 
 
 async def summarize_topics(topic_ids: list[str]) -> dict[str, int]:
-    """Summarize one or more topics using Claude Haiku.
+    """Summarize one or more topics using Gemini Flash.
 
     Returns stats: {summarized, failed, skipped_sensitive, skipped_cap}.
     """
     supabase = get_supabase_client()
-    client = _get_anthropic_client()
+    client = _get_genai_client()
 
     stats = {
         "summarized": 0,
@@ -264,19 +262,23 @@ async def summarize_topics(topic_ids: list[str]) -> dict[str, int]:
         posts_text = _build_posts_text(posts)
         prompt = PROMPT_TEMPLATE.format(posts_text=posts_text)
 
-        # Call Claude Haiku
+        # Call Gemini Flash
         parsed: dict[str, Any] | None = None
         for attempt in range(2):  # 1 retry
             try:
-                response = await client.messages.create(
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
                     model=MODEL,
-                    max_tokens=500,
-                    messages=[{"role": "user", "content": prompt}],
+                    contents=prompt,
                 )
-                response_text = response.content[0].text
-                tokens_used = (response.usage.input_tokens or 0) + (
-                    response.usage.output_tokens or 0
-                )
+                response_text = response.text
+                usage_metadata = response.usage_metadata
+                tokens_used = 0
+                if usage_metadata:
+                    tokens_used = (
+                        (usage_metadata.prompt_token_count or 0)
+                        + (usage_metadata.candidates_token_count or 0)
+                    )
                 await _increment_token_usage(tokens_used)
 
                 parsed = _parse_llm_response(response_text)

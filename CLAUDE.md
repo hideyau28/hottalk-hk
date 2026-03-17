@@ -16,7 +16,7 @@ Frontend:  Next.js 14 (App Router, ISR + On-demand) + Tailwind CSS + shadcn/ui
 Database:  Supabase (PostgreSQL + pgvector + Edge Functions + Auth)
 Cache:     Upstash Redis + QStash (scheduler/webhook)
 AI Worker: Zeabur (Python 3.11 FastAPI, always-on)
-AI APIs:   Claude Haiku (summarization) + OpenAI text-embedding-3-small (vectors)
+AI APIs:   Google Gemini Flash (summarization) + Google text-embedding-004 (vectors)
 Hosting:   Vercel (frontend) + Supabase Cloud + Zeabur + Upstash
 ```
 
@@ -55,7 +55,7 @@ hottalk-hk/
 │   │   └── summarize.py                # Claude Haiku 摘要生成
 │   ├── collectors/
 │   ├── utils/
-│   │   ├── embedding.py                # OpenAI embedding (batch)
+│   │   ├── embedding.py                # Gemini embedding (batch)
 │   │   ├── heat_score.py               # v3.2: 簡化加權公式
 │   │   └── sensitive_filter.py         # 敏感字過濾
 │   ├── requirements.txt

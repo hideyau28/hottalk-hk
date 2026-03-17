@@ -54,7 +54,7 @@ share_count INTEGER DEFAULT 0,
 
 -- AI Processing
 
-embedding vector(1536),
+embedding vector(768),
 
 normalized_text TEXT, -- 🆕 entity-normalized 版本
 
@@ -172,7 +172,7 @@ sentiment_controversial FLOAT DEFAULT 0,
 
 -- AI Clustering (v2.1 NEW)
 
-centroid vector(1536), -- 🆕 mean(所有 assigned posts 嘅 embeddings)
+centroid vector(768), -- 🆕 mean(所有 assigned posts 嘅 embeddings)
 
 centroid_post_count INTEGER DEFAULT 0, -- 🆕 用咗幾多 posts 計算 centroid（避免全量重算）
 

@@ -1,45 +1,44 @@
 from __future__ import annotations
 
+import asyncio
 import os
-import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
-from openai import AsyncOpenAI
+from google import genai
 
 from worker.utils.entity_normalize import build_normalized_text
 from worker.utils.supabase_client import get_supabase_client
 
 logger = structlog.get_logger()
 
-EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIM = 1536
-BATCH_MAX = 2048  # OpenAI max texts per call
+EMBEDDING_MODEL = "text-embedding-004"
+EMBEDDING_DIM = 768
+BATCH_MAX = 100  # Gemini batch limit
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0  # seconds
 
 
-def _get_openai_client() -> AsyncOpenAI:
-    return AsyncOpenAI(
-        api_key=os.environ["OPENAI_API_KEY"],
-        timeout=30.0,
-    )
+def _get_genai_client() -> genai.Client:
+    return genai.Client(api_key=os.environ["GOOGLE_AI_API_KEY"])
 
 
-async def _embed_batch(client: AsyncOpenAI, texts: list[str]) -> list[list[float]]:
-    """Call OpenAI embeddings API for a batch of texts."""
-    response = await client.embeddings.create(
+async def _embed_batch(client: genai.Client, texts: list[str]) -> list[list[float]]:
+    """Call Gemini embeddings API for a batch of texts."""
+    from google.genai import types
+
+    requests = [types.EmbedContentRequest(content=t, model=EMBEDDING_MODEL) for t in texts]
+    response = await asyncio.to_thread(
+        client.models.batch_embed_contents,
         model=EMBEDDING_MODEL,
-        input=texts,
-        dimensions=EMBEDDING_DIM,
+        requests=requests,
     )
-    # Return embeddings in the same order as input
-    sorted_data = sorted(response.data, key=lambda x: x.index)
-    return [item.embedding for item in sorted_data]
+    return [e.values for e in response.embeddings]
 
 
 async def _embed_with_retry(
-    client: AsyncOpenAI, texts: list[str]
+    client: genai.Client, texts: list[str]
 ) -> list[list[float]]:
     """Embed a batch with exponential backoff retry."""
     last_err: Exception | None = None
@@ -55,23 +54,23 @@ async def _embed_with_retry(
                 delay=delay,
                 error=str(e),
             )
-            time.sleep(delay)
+            await asyncio.sleep(delay)
     raise last_err  # type: ignore[misc]
 
 
 async def _embed_single_fallback(
-    client: AsyncOpenAI, texts: list[str]
+    client: genai.Client, texts: list[str]
 ) -> list[list[float] | None]:
     """Fallback: embed one-by-one when batch fails."""
     results: list[list[float] | None] = []
     for text in texts:
         try:
-            response = await client.embeddings.create(
+            response = await asyncio.to_thread(
+                client.models.embed_content,
                 model=EMBEDDING_MODEL,
-                input=[text],
-                dimensions=EMBEDDING_DIM,
+                content=text,
             )
-            results.append(response.data[0].embedding)
+            results.append(response.embedding.values)
         except Exception as e:
             logger.error("single_embed_failed", error=str(e))
             results.append(None)
@@ -84,7 +83,7 @@ async def batch_embed_pending_posts() -> dict[str, int]:
     Flow:
     1. Query pending posts (published_at > NOW() - 48h)
     2. Build normalized_text for each
-    3. Batch call OpenAI embedding API
+    3. Batch call Gemini embedding API
     4. Write back: embedding, normalized_text, processing_status='embedded'
 
     Returns stats dict: {embedded, failed, skipped}.
@@ -96,7 +95,7 @@ async def batch_embed_pending_posts() -> dict[str, int]:
         supabase.table("raw_posts")
         .select("id, title, description")
         .eq("processing_status", "pending")
-        .gte("published_at", "now() - interval '48 hours'")
+        .gte("published_at", (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat())
         .limit(2000)
         .execute()
     )
@@ -117,7 +116,7 @@ async def batch_embed_pending_posts() -> dict[str, int]:
         post_ids.append(post["id"])
 
     # Batch embed (split into chunks of BATCH_MAX)
-    client = _get_openai_client()
+    client = _get_genai_client()
     all_embeddings: list[list[float] | None] = []
     embedded_count = 0
     failed_count = 0
