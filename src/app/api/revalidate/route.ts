@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
-import { Receiver } from "@upstash/qstash";
 
-const receiver = new Receiver({
-  currentSigningKey: process.env.QSTASH_CURRENT_SIGNING_KEY ?? "",
-  nextSigningKey: process.env.QSTASH_NEXT_SIGNING_KEY ?? "",
-});
+const REVALIDATION_SECRET = process.env.REVALIDATION_SECRET ?? "";
 
 interface RevalidateBody {
   paths?: string[];
@@ -14,20 +10,18 @@ interface RevalidateBody {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.text();
-    const signature = request.headers.get("upstash-signature") ?? "";
+    // Verify shared secret
+    const authHeader = request.headers.get("authorization") ?? "";
+    const secret = request.headers.get("x-revalidation-secret") ?? "";
 
-    // Verify QStash signature
-    const isValid = await receiver.verify({
-      signature,
-      body,
-    }).catch(() => false);
-
-    if (!isValid) {
-      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+    if (
+      authHeader !== `Bearer ${REVALIDATION_SECRET}` &&
+      secret !== REVALIDATION_SECRET
+    ) {
+      return NextResponse.json({ error: "Invalid secret" }, { status: 401 });
     }
 
-    const payload: RevalidateBody = JSON.parse(body);
+    const payload: RevalidateBody = await request.json();
     const revalidated: string[] = [];
 
     // Always revalidate homepage

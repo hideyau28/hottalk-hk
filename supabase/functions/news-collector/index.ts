@@ -1,5 +1,4 @@
 import { getServiceClient } from "../_shared/supabase-client.ts";
-import { verifyQStashSignature } from "../_shared/qstash-verify.ts";
 import {
   contentHash,
   stripTrackingParams,
@@ -25,12 +24,7 @@ interface ParsedItem {
   imageUrl: string | null;
 }
 
-Deno.serve(async (req: Request) => {
-  const isValid = await verifyQStashSignature(req);
-  if (!isValid) {
-    return errorResponse("Unauthorized", 401);
-  }
-
+Deno.serve(async () => {
   const startTime = Date.now();
   const supabase = getServiceClient();
 
@@ -71,7 +65,7 @@ Deno.serve(async (req: Request) => {
 
     // Fetch all RSS feeds concurrently
     const feedResults = await Promise.allSettled(
-      sources.map((src) => fetchAndParseFeed(src, controller.signal))
+      sources.map((src) => fetchAndParseFeed(src, controller.signal)),
     );
     clearTimeout(globalTimeout);
 
@@ -112,7 +106,7 @@ Deno.serve(async (req: Request) => {
             published_at: parseDate(item.pubDate),
             collected_at: new Date().toISOString(),
           };
-        })
+        }),
       );
       allRows.push(...rows);
     }
@@ -124,7 +118,11 @@ Deno.serve(async (req: Request) => {
         posts_new: 0,
         error_message: `All feeds empty or failed. Failed sources: ${failedSources}/${sources.length}`,
       });
-      return jsonResponse({ collector: "news_collector", posts_fetched: 0, posts_new: 0 });
+      return jsonResponse({
+        collector: "news_collector",
+        posts_fetched: 0,
+        posts_new: 0,
+      });
     }
 
     // Batch upsert (chunked to avoid payload limits)
@@ -153,9 +151,10 @@ Deno.serve(async (req: Request) => {
       status_code: 200,
       posts_fetched: allRows.length,
       posts_new: totalNew,
-      error_message: failedSources > 0
-        ? `${failedSources}/${sources.length} sources failed`
-        : null,
+      error_message:
+        failedSources > 0
+          ? `${failedSources}/${sources.length} sources failed`
+          : null,
     });
 
     return jsonResponse({
@@ -177,10 +176,13 @@ Deno.serve(async (req: Request) => {
 
 async function fetchAndParseFeed(
   source: NewsSource,
-  signal: AbortSignal
+  signal: AbortSignal,
 ): Promise<ParsedItem[]> {
   const feedController = new AbortController();
-  const feedTimeout = setTimeout(() => feedController.abort(), PER_FEED_TIMEOUT_MS);
+  const feedTimeout = setTimeout(
+    () => feedController.abort(),
+    PER_FEED_TIMEOUT_MS,
+  );
 
   // Abort if parent signal fires
   const onAbort = () => feedController.abort();
@@ -242,7 +244,7 @@ function extractCdata(block: string, tag: string): string | null {
   // Try CDATA first
   const cdataRe = new RegExp(
     `<${tag}[^>]*>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>\\s*</${tag}>`,
-    "i"
+    "i",
   );
   const cdataMatch = cdataRe.exec(block);
   if (cdataMatch) return cdataMatch[1];
@@ -264,7 +266,10 @@ function extractAttr(block: string, tag: string, attr: string): string | null {
 }
 
 function stripHtml(html: string): string {
-  return html.replace(/<[^>]+>/g, "").replace(/&[^;]+;/g, " ").trim();
+  return html
+    .replace(/<[^>]+>/g, "")
+    .replace(/&[^;]+;/g, " ")
+    .trim();
 }
 
 function parseDate(dateStr: string): string {
@@ -281,7 +286,7 @@ async function finalizeScrapeRun(
   supabase: ReturnType<typeof getServiceClient>,
   runId: string,
   startTime: number,
-  fields: Record<string, unknown>
+  fields: Record<string, unknown>,
 ) {
   await supabase
     .from("scrape_runs")

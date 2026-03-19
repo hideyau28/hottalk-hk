@@ -1,11 +1,6 @@
 """Telegram alerting for HotTalk HK monitoring.
 
-Alert conditions:
-- Collector consecutive failures >= 5
-- LIHKG degraded to L3
-- LLM daily cost > $0.08 (warning) / > $0.15 (hard stop)
-- AI Worker healthcheck fail
-- 0 new topics in 6h
+Redis removed — dedup uses simple in-memory set (resets on restart).
 """
 
 from __future__ import annotations
@@ -16,30 +11,17 @@ from datetime import datetime, timezone
 import httpx
 import structlog
 
-from worker.utils.monitoring import get_consecutive_failures
 from worker.utils.supabase_client import get_supabase_client
 
 logger = structlog.get_logger()
 
 CONSECUTIVE_FAIL_THRESHOLD = 5
-LLM_COST_WARNING_USD = 0.08
-LLM_COST_HARD_STOP_USD = 0.15
-# Conservative avg: Haiku input $0.25/1M + output $1.25/1M, blended ~$0.80/1M
-LLM_COST_PER_TOKEN = 0.80 / 1_000_000
 ZERO_TOPICS_HOURS = 6
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
-REDIS_TOKEN_KEY_PREFIX = "hottalk:llm_tokens"
-REDIS_LIHKG_LEVEL_KEY = "hottalk:lihkg:degradation_level"
 
-# Dedup: prevent same alert firing more than once per hour
-ALERT_DEDUP_PREFIX = "hottalk:alert_sent"
-ALERT_DEDUP_TTL = 3600  # 1 hour
-
-
-def _get_redis():  # type: ignore[no-untyped-def]
-    from upstash_redis import Redis
-    return Redis.from_env()
+# Simple in-memory dedup (good enough for MVP)
+_sent_alerts: set[str] = set()
 
 
 async def send_telegram_alert(message: str) -> bool:
@@ -70,38 +52,54 @@ async def send_telegram_alert(message: str) -> bool:
 
 
 async def _should_send(alert_key: str) -> bool:
-    """Check dedup: only send same alert once per hour."""
-    try:
-        redis = _get_redis()
-        key = f"{ALERT_DEDUP_PREFIX}:{alert_key}"
-        if redis.get(key):
-            return False
-        redis.set(key, "1")
-        redis.expire(key, ALERT_DEDUP_TTL)
-        return True
-    except Exception:
-        return True  # On Redis error, send the alert anyway
+    """Simple in-memory dedup."""
+    if alert_key in _sent_alerts:
+        return False
+    _sent_alerts.add(alert_key)
+    return True
 
 
 async def check_and_alert_collector(collector: str, success: bool) -> None:
-    """Check consecutive failures for a collector and alert if threshold met."""
+    """Check consecutive failures from DB and alert if threshold met."""
     if success:
         return
 
-    count = await get_consecutive_failures(collector)
-    if count >= CONSECUTIVE_FAIL_THRESHOLD:
-        if await _should_send(f"collector_fail:{collector}"):
-            await send_telegram_alert(
-                f"Collector <b>{collector}</b> 連續失敗 {count} 次"
-            )
+    try:
+        supabase = get_supabase_client()
+        result = (
+            supabase.table("scrape_runs")
+            .select("status")
+            .eq("collector_name", collector)
+            .order("started_at", desc=True)
+            .limit(CONSECUTIVE_FAIL_THRESHOLD)
+            .execute()
+        )
+        runs = result.data or []
+        consecutive = sum(1 for r in runs if r["status"] == "failed")
+
+        if consecutive >= CONSECUTIVE_FAIL_THRESHOLD:
+            if await _should_send(f"collector_fail:{collector}"):
+                await send_telegram_alert(
+                    f"Collector <b>{collector}</b> 連續失敗 {consecutive} 次"
+                )
+    except Exception as e:
+        logger.warning("check_alert_failed", collector=collector, error=str(e))
 
 
 async def check_lihkg_degradation() -> None:
-    """Alert if LIHKG is degraded to L3."""
+    """Alert if LIHKG is degraded to L3 (check from DB)."""
     try:
-        redis = _get_redis()
-        level = redis.get(REDIS_LIHKG_LEVEL_KEY)
-        if level == "L3":
+        supabase = get_supabase_client()
+        result = (
+            supabase.table("scrape_runs")
+            .select("degradation_level")
+            .eq("collector_name", "lihkg_collector")
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        runs = result.data or []
+        if runs and runs[0].get("degradation_level") == "L3":
             if await _should_send("lihkg_l3"):
                 await send_telegram_alert(
                     "LIHKG 降級到 <b>L3</b>（HTML fallback 模式）"
@@ -110,57 +108,20 @@ async def check_lihkg_degradation() -> None:
         logger.warning("check_lihkg_degradation_failed", error=str(e))
 
 
-async def check_llm_cost() -> str | None:
-    """Check LLM daily cost. Returns 'hard_stop', 'warning', or None.
-
-    Caller should stop summarization when 'hard_stop' is returned.
-    """
-    try:
-        redis = _get_redis()
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        key = f"{REDIS_TOKEN_KEY_PREFIX}:{today}"
-        val = redis.get(key)
-        tokens = int(val) if val else 0
-        cost = tokens * LLM_COST_PER_TOKEN
-
-        if cost > LLM_COST_HARD_STOP_USD:
-            if await _should_send("llm_hard_stop"):
-                await send_telegram_alert(
-                    f"LLM 日費用超過 hard stop！"
-                    f"Tokens: {tokens:,} | 估算: ${cost:.4f}"
-                )
-            return "hard_stop"
-
-        if cost > LLM_COST_WARNING_USD:
-            if await _should_send("llm_warning"):
-                await send_telegram_alert(
-                    f"LLM 日費用超過 warning 閾值\n"
-                    f"Tokens: {tokens:,} | 估算: ${cost:.4f}"
-                )
-            return "warning"
-
-        return None
-    except Exception as e:
-        logger.warning("check_llm_cost_failed", error=str(e))
-        return None
-
-
 async def check_zero_topics(hours: int = ZERO_TOPICS_HOURS) -> None:
     """Alert if no new topics in the specified number of hours."""
     try:
         supabase = get_supabase_client()
+        since = datetime.now(timezone.utc).isoformat()
         result = (
             supabase.table("topics")
             .select("id", count="exact")
             .gte(
                 "first_detected_at",
-                datetime.now(timezone.utc)
-                .isoformat()
-                .replace("+00:00", f"-{hours:02d}:00:00"),
+                since.replace("+00:00", f"-{hours:02d}:00:00"),
             )
             .execute()
         )
-        # Use the count from the response
         count = result.count if result.count is not None else len(result.data)
         if count == 0:
             if await _should_send("zero_topics"):
@@ -169,20 +130,3 @@ async def check_zero_topics(hours: int = ZERO_TOPICS_HOURS) -> None:
                 )
     except Exception as e:
         logger.warning("check_zero_topics_failed", error=str(e))
-
-
-async def check_worker_health(health_url: str) -> None:
-    """Alert if AI Worker health endpoint fails."""
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(health_url)
-            if resp.status_code != 200:
-                if await _should_send("worker_health"):
-                    await send_telegram_alert(
-                        f"AI Worker healthcheck 失敗 (status {resp.status_code})"
-                    )
-    except Exception as e:
-        if await _should_send("worker_health"):
-            await send_telegram_alert(
-                f"AI Worker healthcheck 失敗: {str(e)[:100]}"
-            )

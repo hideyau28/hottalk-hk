@@ -11,13 +11,6 @@ from worker.collectors.google_trends import collect_google_trends
 from worker.jobs.incremental_assign import run_incremental_assign
 from worker.jobs.daily_brief import generate_daily_brief
 from worker.jobs.nightly_recluster import run_nightly_recluster
-from worker.utils.alerting import (
-    check_and_alert_collector,
-    check_lihkg_degradation,
-    check_zero_topics,
-)
-from worker.utils.monitoring import record_error, record_ok
-from worker.utils.qstash_verify import verify_qstash_signature
 from worker.utils.supabase_client import get_supabase_client
 
 structlog.configure(
@@ -29,7 +22,7 @@ structlog.configure(
 
 logger = structlog.get_logger()
 
-app = FastAPI(title="HotTalk HK AI Worker", version="2.0.0")
+app = FastAPI(title="HotTalk HK AI Worker", version="2.1.0")
 
 # Timeout for all jobs: 5 minutes
 JOB_TIMEOUT_SECONDS = 300
@@ -90,40 +83,26 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/jobs/collect-google-trends")
-async def job_collect_google_trends(request: Request) -> dict | Response:
-    is_valid = await verify_qstash_signature(request)
-    if not is_valid:
-        return Response(content="Unauthorized", status_code=401)
-
+async def job_collect_google_trends() -> dict | Response:
     collector = "google_trends_collector"
     try:
         result = await asyncio.wait_for(
             collect_google_trends(),
             timeout=JOB_TIMEOUT_SECONDS,
         )
-        await record_ok(collector)
-        await check_and_alert_collector(collector, success=True)
         logger.info("job_completed", job="collect-google-trends", result=result)
         return result
     except asyncio.TimeoutError:
-        await record_error(collector, "Job timed out after 5 minutes")
-        await check_and_alert_collector(collector, success=False)
         logger.error("job_timeout", job="collect-google-trends")
         return Response(content="Job timed out", status_code=504)
     except Exception as e:
-        await record_error(collector, str(e))
-        await check_and_alert_collector(collector, success=False)
         logger.error("job_failed", job="collect-google-trends", error=str(e))
         return Response(content=f"Internal error: {e}", status_code=500)
 
 
 @app.post("/jobs/incremental-assign")
-async def job_incremental_assign(request: Request) -> dict | Response:
-    """Incremental topic assignment — triggered every 10 min by QStash."""
-    is_valid = await verify_qstash_signature(request)
-    if not is_valid:
-        return Response(content="Unauthorized", status_code=401)
-
+async def job_incremental_assign() -> dict | Response:
+    """Incremental topic assignment — triggered every 10 min by Vercel Cron."""
     collector = "incremental_assign"
     start_time = datetime.now(timezone.utc)
     run_id = _create_job_run(collector)
@@ -133,40 +112,25 @@ async def job_incremental_assign(request: Request) -> dict | Response:
             run_incremental_assign(),
             timeout=JOB_TIMEOUT_SECONDS,
         )
-        await record_ok(collector)
-        await check_and_alert_collector(collector, success=True)
         _finalize_job_run(run_id, start_time, "success", extra={
             "posts_fetched": result.get("posts_processed", 0),
             "posts_new": result.get("new_topics", 0),
         })
         logger.info("job_completed", job="incremental-assign", result=result)
-
-        # Periodic checks after incremental assign
-        await check_zero_topics()
-        await check_lihkg_degradation()
-
         return result
     except asyncio.TimeoutError:
-        await record_error(collector, "Job timed out after 5 minutes")
-        await check_and_alert_collector(collector, success=False)
         _finalize_job_run(run_id, start_time, "failed", error_message="Timeout after 5 minutes")
         logger.error("job_timeout", job="incremental-assign")
         return Response(content="Job timed out", status_code=504)
     except Exception as e:
-        await record_error(collector, str(e))
-        await check_and_alert_collector(collector, success=False)
         _finalize_job_run(run_id, start_time, "failed", error_message=str(e))
         logger.error("job_failed", job="incremental-assign", error=str(e), tb=traceback.format_exc())
         return Response(content=f"Internal error: {e}", status_code=500)
 
 
 @app.post("/jobs/nightly-recluster")
-async def job_nightly_recluster(request: Request) -> dict | Response:
-    """Nightly HDBSCAN recluster — triggered daily at 02:00 HKT by QStash."""
-    is_valid = await verify_qstash_signature(request)
-    if not is_valid:
-        return Response(content="Unauthorized", status_code=401)
-
+async def job_nightly_recluster() -> dict | Response:
+    """Nightly HDBSCAN recluster — triggered daily at 02:00 HKT."""
     collector = "nightly_recluster"
     start_time = datetime.now(timezone.utc)
     run_id = _create_job_run(collector)
@@ -176,48 +140,35 @@ async def job_nightly_recluster(request: Request) -> dict | Response:
             run_nightly_recluster(),
             timeout=JOB_TIMEOUT_SECONDS,
         )
-        await record_ok(collector)
-        await check_and_alert_collector(collector, success=True)
         _finalize_job_run(run_id, start_time, "success", extra={
             "posts_fetched": result.get("total_posts", 0),
         })
         logger.info("job_completed", job="nightly-recluster", result=result)
         return result
     except asyncio.TimeoutError:
-        await record_error(collector, "Job timed out after 5 minutes")
-        await check_and_alert_collector(collector, success=False)
         _finalize_job_run(run_id, start_time, "failed", error_message="Timeout after 5 minutes")
         logger.error("job_timeout", job="nightly-recluster")
         return Response(content="Job timed out", status_code=504)
     except Exception as e:
-        await record_error(collector, str(e))
-        await check_and_alert_collector(collector, success=False)
         _finalize_job_run(run_id, start_time, "failed", error_message=str(e))
         logger.error("job_failed", job="nightly-recluster", error=str(e), tb=traceback.format_exc())
         return Response(content=f"Internal error: {e}", status_code=500)
 
 
 @app.post("/jobs/daily-brief")
-async def job_daily_brief(request: Request) -> dict | Response:
-    """Generate daily brief — triggered daily at 12:00 HKT by QStash."""
-    is_valid = await verify_qstash_signature(request)
-    if not is_valid:
-        return Response(content="Unauthorized", status_code=401)
-
+async def job_daily_brief() -> dict | Response:
+    """Generate daily brief — triggered daily at 12:00 HKT."""
     collector = "daily_brief"
     try:
         result = await asyncio.wait_for(
             generate_daily_brief(),
             timeout=JOB_TIMEOUT_SECONDS,
         )
-        await record_ok(collector)
         logger.info("job_completed", job="daily-brief", result=result)
         return result
     except asyncio.TimeoutError:
-        await record_error(collector, "Job timed out after 5 minutes")
         logger.error("job_timeout", job="daily-brief")
         return Response(content="Job timed out", status_code=504)
     except Exception as e:
-        await record_error(collector, str(e))
         logger.error("job_failed", job="daily-brief", error=str(e), tb=traceback.format_exc())
         return Response(content=f"Internal error: {e}", status_code=500)

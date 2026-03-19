@@ -1,15 +1,28 @@
-import { Redis } from "@upstash/redis";
-import { Ratelimit } from "@upstash/ratelimit";
+/**
+ * Simple in-memory rate limiter (replaces Upstash Redis).
+ * Good enough for MVP — resets on redeploy.
+ */
 
-export const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL ?? "",
-  token: process.env.UPSTASH_REDIS_REST_TOKEN ?? "",
-});
+const store = new Map<string, { count: number; resetAt: number }>();
 
-/** Sliding window rate limiter: 5 requests per 60 seconds. */
-export const reportRatelimit = new Ratelimit({
-  redis,
-  limiter: Ratelimit.slidingWindow(5, "60 s"),
-  analytics: true,
-  prefix: "ratelimit:report",
-});
+export const reportRatelimit = {
+  async limit(identifier: string): Promise<{ success: boolean }> {
+    const now = Date.now();
+    const windowMs = 60_000; // 60 seconds
+    const maxRequests = 5;
+
+    const entry = store.get(identifier);
+
+    if (!entry || now > entry.resetAt) {
+      store.set(identifier, { count: 1, resetAt: now + windowMs });
+      return { success: true };
+    }
+
+    if (entry.count >= maxRequests) {
+      return { success: false };
+    }
+
+    entry.count++;
+    return { success: true };
+  },
+};

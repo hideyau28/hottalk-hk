@@ -1,26 +1,13 @@
 import { getServiceClient } from "../_shared/supabase-client.ts";
-import { verifyQStashSignature } from "../_shared/qstash-verify.ts";
 import { contentHash, errorResponse, jsonResponse } from "../_shared/utils.ts";
 
-// --- Constants ---
 const TIMEOUT_MS = 120_000;
 const LIHKG_API_BASE = "https://lihkg.com/api_v2/thread/hot";
 const LIHKG_WEB_BASE = "https://lihkg.com";
 
 // Degradation triggers
-const L1_TO_L2_CONSECUTIVE_FAILURES = 3; // 連續 3 次 403/429
-const L1_TO_L2_CONSECUTIVE_TIMEOUTS = 2; // 連續 2 次 timeout
-const L2_TO_L3_CONSECUTIVE_FAILURES = 3; // proxy B 亦連續 3 次失敗
-
-// Frequency control (ms)
-const L2_INTERVAL_MS = 30 * 60 * 1000; // 30 min
-const L3_INTERVAL_MS = 60 * 60 * 1000; // 60 min
-
-// Redis keys
-const REDIS_LEVEL_KEY = "hottalk:lihkg:degradation_level";
-const REDIS_FAILURES_KEY = "hottalk:lihkg:consecutive_failures";
-const REDIS_LAST_L2_KEY = "hottalk:lihkg:last_l2_fetch";
-const REDIS_LAST_L3_KEY = "hottalk:lihkg:last_l3_fetch";
+const L1_TO_L2_CONSECUTIVE_FAILURES = 3;
+const L2_TO_L3_CONSECUTIVE_FAILURES = 3;
 
 type DegradationLevel = "L1" | "L2" | "L3";
 
@@ -35,68 +22,51 @@ interface LihkgThread {
   create_time: number;
 }
 
-interface RedisClient {
-  get: (key: string) => Promise<string | null>;
-  set: (key: string, value: string) => Promise<void>;
-  incr: (key: string) => Promise<number>;
-}
+/**
+ * Get degradation level from recent scrape_runs in DB.
+ */
+async function getDegradationLevel(
+  supabase: ReturnType<typeof getServiceClient>
+): Promise<DegradationLevel> {
+  const { data } = await supabase
+    .from("scrape_runs")
+    .select("status, degradation_level")
+    .eq("collector_name", "lihkg_collector")
+    .order("started_at", { ascending: false })
+    .limit(L1_TO_L2_CONSECUTIVE_FAILURES);
 
-async function getRedisClient(): Promise<RedisClient> {
-  const url = Deno.env.get("UPSTASH_REDIS_REST_URL");
-  const token = Deno.env.get("UPSTASH_REDIS_REST_TOKEN");
-  if (!url || !token) throw new Error("Missing Upstash Redis config");
+  if (!data || data.length === 0) return "L1";
 
-  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-
-  async function command(...args: string[]): Promise<unknown> {
-    const resp = await fetch(`${url}`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(args),
-    });
-    const data = await resp.json();
-    return data.result;
+  // Count consecutive failures
+  let consecutiveFails = 0;
+  for (const run of data) {
+    if (run.status === "failed") consecutiveFails++;
+    else break;
   }
 
-  return {
-    get: async (key: string) => (await command("GET", key)) as string | null,
-    set: async (key: string, value: string) => { await command("SET", key, value); },
-    incr: async (key: string) => Number(await command("INCR", key)),
-  };
-}
+  // Check last known degradation level
+  const lastLevel = (data[0]?.degradation_level ?? "L1") as DegradationLevel;
 
-Deno.serve(async (req: Request) => {
-  const isValid = await verifyQStashSignature(req);
-  if (!isValid) {
-    return errorResponse("Unauthorized", 401);
+  if (lastLevel === "L2" && consecutiveFails >= L2_TO_L3_CONSECUTIVE_FAILURES) {
+    return "L3";
+  }
+  if (lastLevel === "L1" && consecutiveFails >= L1_TO_L2_CONSECUTIVE_FAILURES) {
+    return "L2";
   }
 
+  // If last run was success, reset to L1
+  if (data[0]?.status === "success" || data[0]?.status === "degraded") {
+    return "L1";
+  }
+
+  return lastLevel;
+}
+
+Deno.serve(async () => {
   const startTime = Date.now();
   const supabase = getServiceClient();
 
-  let redis: RedisClient;
-  try {
-    redis = await getRedisClient();
-  } catch (err) {
-    return errorResponse(`Redis init failed: ${err}`);
-  }
-
-  // Determine current degradation level
-  const level = ((await redis.get(REDIS_LEVEL_KEY)) ?? "L1") as DegradationLevel;
-
-  // Check frequency throttle for L2/L3
-  if (level === "L2") {
-    const lastFetch = await redis.get(REDIS_LAST_L2_KEY);
-    if (lastFetch && Date.now() - Number(lastFetch) < L2_INTERVAL_MS) {
-      return jsonResponse({ collector: "lihkg_collector", status: "skipped", reason: "L2 throttle" });
-    }
-  }
-  if (level === "L3") {
-    const lastFetch = await redis.get(REDIS_LAST_L3_KEY);
-    if (lastFetch && Date.now() - Number(lastFetch) < L3_INTERVAL_MS) {
-      return jsonResponse({ collector: "lihkg_collector", status: "skipped", reason: "L3 throttle" });
-    }
-  }
+  const level = await getDegradationLevel(supabase);
 
   // Create scrape_run
   const { data: scrapeRun, error: scrapeErr } = await supabase
@@ -124,16 +94,8 @@ Deno.serve(async (req: Request) => {
       const proxyUrl = level === "L1"
         ? Deno.env.get("PROXY_A_URL")
         : Deno.env.get("PROXY_B_URL");
-      result = await fetchApi(proxyUrl ?? null, level);
+      result = await fetchApi(proxyUrl ?? null);
     }
-
-    // Success → reset degradation
-    await redis.set(REDIS_LEVEL_KEY, "L1");
-    await redis.set(REDIS_FAILURES_KEY, "0");
-
-    // Update throttle timestamp
-    if (level === "L2") await redis.set(REDIS_LAST_L2_KEY, String(Date.now()));
-    if (level === "L3") await redis.set(REDIS_LAST_L3_KEY, String(Date.now()));
 
     // Prepare and upsert rows
     const rows = await Promise.all(
@@ -198,32 +160,9 @@ Deno.serve(async (req: Request) => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const isBlockError = message.includes("403") || message.includes("429");
-    const isTimeout = message.includes("abort") || message.includes("timeout");
-
-    // Increment failure counter
-    const failures = await redis.incr(REDIS_FAILURES_KEY);
-
-    // Determine degradation transition
-    if (level === "L1") {
-      if ((isBlockError && failures >= L1_TO_L2_CONSECUTIVE_FAILURES) ||
-          (isTimeout && failures >= L1_TO_L2_CONSECUTIVE_TIMEOUTS)) {
-        await redis.set(REDIS_LEVEL_KEY, "L2");
-        await redis.set(REDIS_FAILURES_KEY, "0");
-      }
-    } else if (level === "L2") {
-      if (failures >= L2_TO_L3_CONSECUTIVE_FAILURES) {
-        await redis.set(REDIS_LEVEL_KEY, "L3");
-        await redis.set(REDIS_FAILURES_KEY, "0");
-      }
-    }
-    // L3 failure: stay at L3, just log
-
-    const statusCode = isBlockError ? (message.includes("403") ? 403 : 429) : undefined;
 
     await finalizeScrapeRun(supabase, runId, startTime, {
       status: "failed",
-      status_code: statusCode,
       degradation_level: level,
       error_message: message.slice(0, 1000),
     });
@@ -234,7 +173,6 @@ Deno.serve(async (req: Request) => {
 
 async function fetchApi(
   proxyUrl: string | null,
-  level: DegradationLevel
 ): Promise<{ threads: LihkgThread[]; statusCode: number; proxyUsed: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -250,7 +188,6 @@ async function fetchApi(
     },
   };
 
-  // If proxy is configured, route through it
   const targetUrl = proxyUrl
     ? `${proxyUrl}?url=${encodeURIComponent(apiUrl)}`
     : apiUrl;
@@ -291,7 +228,6 @@ async function fetchL3(): Promise<{
   statusCode: number;
   proxyUsed: string;
 }> {
-  // L3: simple HTTP fetch of hot list page, parse titles + thread IDs
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
@@ -321,9 +257,6 @@ async function fetchL3(): Promise<{
 
 function parseL3Html(html: string): LihkgThread[] {
   const threads: LihkgThread[] = [];
-
-  // Extract thread links and titles from HTML
-  // Pattern: /thread/{threadId}/page/1 with title text
   const threadRegex = /\/thread\/(\d+)\/page\/\d+[^"]*"[^>]*>([^<]+)</gi;
   let match;
   const seen = new Set<string>();
@@ -351,12 +284,11 @@ function parseL3Html(html: string): LihkgThread[] {
 }
 
 function hashProxy(url: string): string {
-  // Simple hash for proxy tracking (唔暴露完整 URL)
   let hash = 0;
   for (let i = 0; i < url.length; i++) {
     const char = url.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
+    hash = hash & hash;
   }
   return `proxy_${Math.abs(hash).toString(16)}`;
 }

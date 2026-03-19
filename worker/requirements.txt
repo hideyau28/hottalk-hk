@@ -10,4 +10,4 @@ google-genai>=1.0.0
 numpy>=1.26.0
 scikit-learn>=1.4.0
 hdbscan>=0.8.38
-upstash-redis>=1.0.0
+# upstash-redis removed — MVP uses DB for state

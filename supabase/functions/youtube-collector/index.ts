@@ -1,6 +1,10 @@
 import { getServiceClient } from "../_shared/supabase-client.ts";
-import { verifyQStashSignature } from "../_shared/qstash-verify.ts";
-import { contentHash, normalizeTitle, errorResponse, jsonResponse } from "../_shared/utils.ts";
+import {
+  contentHash,
+  normalizeTitle,
+  errorResponse,
+  jsonResponse,
+} from "../_shared/utils.ts";
 
 const YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3";
 const MAX_RESULTS = 50;
@@ -27,13 +31,7 @@ interface YouTubeResponse {
   items: YouTubeVideo[];
 }
 
-Deno.serve(async (req: Request) => {
-  // QStash signature verification
-  const isValid = await verifyQStashSignature(req);
-  if (!isValid) {
-    return errorResponse("Unauthorized", 401);
-  }
-
+Deno.serve(async () => {
   const startTime = Date.now();
   const supabase = getServiceClient();
   const apiKey = Deno.env.get("YOUTUBE_API_KEY");
@@ -125,7 +123,7 @@ Deno.serve(async (req: Request) => {
           published_at: v.snippet.publishedAt,
           collected_at: new Date().toISOString(),
         };
-      })
+      }),
     );
 
     // Upsert raw_posts
@@ -172,7 +170,7 @@ async function finalizeScrapeRun(
   supabase: ReturnType<typeof getServiceClient>,
   runId: string,
   startTime: number,
-  fields: Record<string, unknown>
+  fields: Record<string, unknown>,
 ) {
   await supabase
     .from("scrape_runs")

@@ -22,7 +22,6 @@ from typing import Any
 import structlog
 from google import genai
 
-from worker.utils.alerting import check_llm_cost
 from worker.utils.monitoring import record_error, record_ok
 from worker.utils.sensitive_filter import check_sensitive
 from worker.utils.supabase_client import get_supabase_client
@@ -30,7 +29,6 @@ from worker.utils.supabase_client import get_supabase_client
 logger = structlog.get_logger()
 
 DAILY_TOKEN_CAP = 500_000
-REDIS_TOKEN_KEY_PREFIX = "hottalk:llm_tokens"
 MODEL = "gemini-2.0-flash"
 
 PROMPT_TEMPLATE = """你是香港社交媒體熱話分析師。以下是來自不同平台嘅帖文，全部講緊同一件事。
@@ -59,32 +57,28 @@ def _get_genai_client() -> genai.Client:
     return genai.Client(api_key=os.environ["GOOGLE_AI_API_KEY"])
 
 
-async def _get_daily_token_usage() -> int:
-    """Get today's token usage from Redis. Falls back to 0 if Redis unavailable."""
-    try:
-        from upstash_redis import Redis
+_daily_tokens_used: int = 0
+_daily_tokens_date: str = ""
 
-        redis = Redis.from_env()
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        key = f"{REDIS_TOKEN_KEY_PREFIX}:{today}"
-        val = redis.get(key)
-        return int(val) if val else 0
-    except Exception:
-        return 0
+
+async def _get_daily_token_usage() -> int:
+    """Get today's token usage from in-memory counter."""
+    global _daily_tokens_used, _daily_tokens_date
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _daily_tokens_date != today:
+        _daily_tokens_used = 0
+        _daily_tokens_date = today
+    return _daily_tokens_used
 
 
 async def _increment_token_usage(tokens: int) -> None:
-    """Increment today's token counter in Redis."""
-    try:
-        from upstash_redis import Redis
-
-        redis = Redis.from_env()
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        key = f"{REDIS_TOKEN_KEY_PREFIX}:{today}"
-        redis.incrby(key, tokens)
-        redis.expire(key, 86400 * 2)  # TTL 2 days
-    except Exception as e:
-        logger.warning("redis_token_increment_failed", error=str(e))
+    """Increment today's token counter in memory."""
+    global _daily_tokens_used, _daily_tokens_date
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _daily_tokens_date != today:
+        _daily_tokens_used = 0
+        _daily_tokens_date = today
+    _daily_tokens_used += tokens
 
 
 def _build_posts_text(posts: list[dict[str, Any]]) -> str:
@@ -201,13 +195,6 @@ async def summarize_topics(topic_ids: list[str]) -> dict[str, int]:
             logger.warning("daily_token_cap_reached", usage=usage)
             stats["skipped_cap"] += 1
             continue
-
-        # Check LLM cost threshold (hard stop / warning)
-        cost_status = await check_llm_cost()
-        if cost_status == "hard_stop":
-            logger.warning("llm_cost_hard_stop", topic_id=topic_id)
-            stats["skipped_cap"] += 1
-            break  # Stop all remaining summarizations
 
         # Fetch topic's posts
         posts_result = (
