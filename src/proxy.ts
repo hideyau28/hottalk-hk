@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAuthServerClient, isAdminEmail } from "@/lib/supabase-auth";
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Allow the login page through without auth
@@ -13,10 +13,16 @@ export async function middleware(request: NextRequest) {
 
   const supabase = createAuthServerClient({
     getAll() {
-      return request.cookies.getAll().map((c) => ({ name: c.name, value: c.value }));
+      return request.cookies
+        .getAll()
+        .map((c) => ({ name: c.name, value: c.value }));
     },
     set(name: string, value: string, options: Record<string, unknown>) {
-      response.cookies.set(name, value, options as Parameters<typeof response.cookies.set>[2]);
+      response.cookies.set(
+        name,
+        value,
+        options as Parameters<typeof response.cookies.set>[2],
+      );
     },
   });
 

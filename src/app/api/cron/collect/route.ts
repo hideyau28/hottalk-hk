@@ -17,23 +17,30 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  if (!WORKER_URL) {
+    return NextResponse.json(
+      {
+        error:
+          "WORKER_URL is not configured. Set this env var in your deployment.",
+      },
+      { status: 503 },
+    );
+  }
+
   const results: Record<string, string> = {};
 
   // Trigger all 3 Edge Functions + Google Trends worker in parallel
   const tasks = [
     ...EDGE_FUNCTIONS.map(async (fn) => {
       try {
-        const resp = await fetch(
-          `${SUPABASE_URL}/functions/v1/${fn}`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({}),
-          }
-        );
+        const resp = await fetch(`${SUPABASE_URL}/functions/v1/${fn}`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({}),
+        });
         results[fn] = resp.ok ? "ok" : `error:${resp.status}`;
       } catch (e) {
         results[fn] = `failed:${String(e)}`;
@@ -41,14 +48,11 @@ export async function GET(request: NextRequest) {
     }),
     (async () => {
       try {
-        const resp = await fetch(
-          `${WORKER_URL}/jobs/collect-google-trends`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
-          }
-        );
+        const resp = await fetch(`${WORKER_URL}/jobs/collect-google-trends`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
         results["google-trends"] = resp.ok ? "ok" : `error:${resp.status}`;
       } catch (e) {
         results["google-trends"] = `failed:${String(e)}`;

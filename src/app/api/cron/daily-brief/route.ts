@@ -8,6 +8,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  if (!WORKER_URL) {
+    return NextResponse.json(
+      {
+        error:
+          "WORKER_URL is not configured. Set this env var in your deployment.",
+      },
+      { status: 503 },
+    );
+  }
+
   try {
     const resp = await fetch(`${WORKER_URL}/jobs/daily-brief`, {
       method: "POST",
@@ -19,7 +29,7 @@ export async function GET(request: NextRequest) {
       const text = await resp.text();
       return NextResponse.json(
         { error: `Worker returned ${resp.status}`, detail: text.slice(0, 500) },
-        { status: 502 }
+        { status: 502 },
       );
     }
 
@@ -28,7 +38,7 @@ export async function GET(request: NextRequest) {
   } catch (e) {
     return NextResponse.json(
       { error: `Worker unreachable: ${String(e)}` },
-      { status: 502 }
+      { status: 502 },
     );
   }
 }
