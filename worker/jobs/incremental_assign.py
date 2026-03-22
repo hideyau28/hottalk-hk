@@ -18,11 +18,11 @@ from typing import Any
 import numpy as np
 import structlog
 
-from worker.jobs.summarize import summarize_topics
-from worker.utils.embedding import batch_embed_pending_posts
-from worker.utils.heat_score import calculate_heat_score
-from worker.utils.supabase_client import get_supabase_client
-from worker.utils.topic_status import update_topic_status
+from jobs.summarize import summarize_topics
+from utils.embedding import batch_embed_pending_posts
+from utils.heat_score import calculate_heat_score
+from utils.supabase_client import get_supabase_client
+from utils.topic_status import update_topic_status
 
 logger = structlog.get_logger()
 

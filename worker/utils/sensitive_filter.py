@@ -11,7 +11,7 @@ from typing import Optional
 
 import structlog
 
-from worker.utils.supabase_client import get_supabase_client
+from utils.supabase_client import get_supabase_client
 
 logger = structlog.get_logger()
 

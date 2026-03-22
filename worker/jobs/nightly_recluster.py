@@ -17,7 +17,7 @@ import hdbscan
 import numpy as np
 import structlog
 
-from worker.utils.supabase_client import get_supabase_client
+from utils.supabase_client import get_supabase_client
 
 logger = structlog.get_logger()
 

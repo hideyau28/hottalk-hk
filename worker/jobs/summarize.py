@@ -22,9 +22,9 @@ from typing import Any
 import structlog
 from google import genai
 
-from worker.utils.monitoring import record_error, record_ok
-from worker.utils.sensitive_filter import check_sensitive
-from worker.utils.supabase_client import get_supabase_client
+from utils.monitoring import record_error, record_ok
+from utils.sensitive_filter import check_sensitive
+from utils.supabase_client import get_supabase_client
 
 logger = structlog.get_logger()
 

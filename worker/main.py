@@ -7,11 +7,11 @@ from datetime import datetime, timezone
 import structlog
 from fastapi import FastAPI, Request, Response
 
-from worker.collectors.google_trends import collect_google_trends
-from worker.jobs.incremental_assign import run_incremental_assign
-from worker.jobs.daily_brief import generate_daily_brief
-from worker.jobs.nightly_recluster import run_nightly_recluster
-from worker.utils.supabase_client import get_supabase_client
+from collectors.google_trends import collect_google_trends
+from jobs.incremental_assign import run_incremental_assign
+from jobs.daily_brief import generate_daily_brief
+from jobs.nightly_recluster import run_nightly_recluster
+from utils.supabase_client import get_supabase_client
 
 structlog.configure(
     processors=[

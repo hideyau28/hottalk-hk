@@ -8,8 +8,8 @@ from typing import Any
 import structlog
 from google import genai
 
-from worker.utils.entity_normalize import build_normalized_text
-from worker.utils.supabase_client import get_supabase_client
+from utils.entity_normalize import build_normalized_text
+from utils.supabase_client import get_supabase_client
 
 logger = structlog.get_logger()
 
