@@ -13,9 +13,13 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-import hdbscan
 import numpy as np
 import structlog
+
+try:
+    import hdbscan
+except ImportError:
+    hdbscan = None  # type: ignore[assignment]
 
 from utils.supabase_client import get_supabase_client
 
@@ -65,6 +69,10 @@ async def run_nightly_recluster() -> dict[str, Any]:
 
     v3.2: Analysis only — generates suggestions, no production writes.
     """
+    if hdbscan is None:
+        logger.warning("hdbscan_not_installed", msg="skipping nightly recluster")
+        return {"skipped": True, "reason": "hdbscan not installed"}
+
     supabase = get_supabase_client()
 
     stats: dict[str, Any] = {
