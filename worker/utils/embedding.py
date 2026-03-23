@@ -26,13 +26,10 @@ def _get_genai_client() -> genai.Client:
 
 async def _embed_batch(client: genai.Client, texts: list[str]) -> list[list[float]]:
     """Call Gemini embeddings API for a batch of texts."""
-    from google.genai import types
-
-    requests = [types.EmbedContentRequest(content=t, model=EMBEDDING_MODEL) for t in texts]
     response = await asyncio.to_thread(
-        client.models.batch_embed_contents,
+        client.models.embed_content,
         model=EMBEDDING_MODEL,
-        requests=requests,
+        contents=texts,
     )
     return [e.values for e in response.embeddings]
 
@@ -68,9 +65,9 @@ async def _embed_single_fallback(
             response = await asyncio.to_thread(
                 client.models.embed_content,
                 model=EMBEDDING_MODEL,
-                content=text,
+                contents=text,
             )
-            results.append(response.embedding.values)
+            results.append(response.embeddings[0].values)
         except Exception as e:
             logger.error("single_embed_failed", error=str(e))
             results.append(None)
