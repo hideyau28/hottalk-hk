@@ -1,17 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import traceback
 from datetime import datetime, timezone
+from typing import Any
 
 import structlog
-from fastapi import FastAPI, Request, Response
-
-from collectors.google_trends import collect_google_trends
-from jobs.incremental_assign import run_incremental_assign
-from jobs.daily_brief import generate_daily_brief
-from jobs.nightly_recluster import run_nightly_recluster
-from utils.supabase_client import get_supabase_client
+from fastapi import FastAPI, Response
 
 structlog.configure(
     processors=[
@@ -22,7 +18,49 @@ structlog.configure(
 
 logger = structlog.get_logger()
 
-app = FastAPI(title="HotTalk HK AI Worker", version="2.1.0")
+# ---------------------------------------------------------------------------
+# Lazy imports — if a job module has a broken dependency the other routes
+# still load and /debug/imports surfaces the exact error.
+# ---------------------------------------------------------------------------
+_LAZY_MODULES: dict[str, str] = {
+    "collect_google_trends": "collectors.google_trends",
+    "incremental_assign": "jobs.incremental_assign",
+    "daily_brief": "jobs.daily_brief",
+    "nightly_recluster": "jobs.nightly_recluster",
+}
+
+_import_errors: dict[str, str] = {}
+
+
+def _lazy_import(module_key: str, attr: str) -> Any:
+    """Import *attr* from the module registered under *module_key*.
+
+    Raises RuntimeError with the original traceback if the import failed.
+    """
+    mod_path = _LAZY_MODULES[module_key]
+    try:
+        mod = importlib.import_module(mod_path)
+        return getattr(mod, attr)
+    except Exception as e:
+        tb = traceback.format_exc()
+        _import_errors[module_key] = tb
+        logger.error("lazy_import_failed", module=mod_path, error=str(e))
+        raise RuntimeError(f"Failed to import {mod_path}.{attr}: {e}") from e
+
+
+# Eagerly try imports at startup so errors are logged immediately,
+# but don't let failures prevent the app from starting.
+for _key, _mod_path in _LAZY_MODULES.items():
+    try:
+        importlib.import_module(_mod_path)
+    except Exception as _e:
+        _import_errors[_key] = traceback.format_exc()
+        logger.error("startup_import_failed", module=_mod_path, error=str(_e),
+                      tb=traceback.format_exc())
+
+from utils.supabase_client import get_supabase_client  # noqa: E402 — always needed
+
+app = FastAPI(title="HotTalk HK AI Worker", version="2.2.0")
 
 # Timeout for all jobs: 5 minutes
 JOB_TIMEOUT_SECONDS = 300
@@ -70,6 +108,10 @@ def _finalize_job_run(
         logger.warning("finalize_job_run_failed", run_id=run_id, error=str(e))
 
 
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     """Health check with DB connectivity test."""
@@ -82,10 +124,28 @@ async def health() -> dict[str, str]:
         return {"status": "degraded", "db": "disconnected"}
 
 
+@app.get("/debug/imports")
+async def debug_imports() -> dict[str, Any]:
+    """Show import status for every job module — surfaces hidden errors."""
+    results: dict[str, Any] = {}
+    for key, mod_path in _LAZY_MODULES.items():
+        if key in _import_errors:
+            results[key] = {"status": "error", "module": mod_path,
+                            "traceback": _import_errors[key]}
+        else:
+            try:
+                importlib.import_module(mod_path)
+                results[key] = {"status": "ok", "module": mod_path}
+            except Exception as e:
+                results[key] = {"status": "error", "module": mod_path,
+                                "traceback": traceback.format_exc()}
+    return {"import_errors_at_startup": len(_import_errors), "modules": results}
+
+
 @app.post("/jobs/collect-google-trends")
 async def job_collect_google_trends():
-    collector = "google_trends_collector"
     try:
+        collect_google_trends = _lazy_import("collect_google_trends", "collect_google_trends")
         result = await asyncio.wait_for(
             collect_google_trends(),
             timeout=JOB_TIMEOUT_SECONDS,
@@ -96,7 +156,8 @@ async def job_collect_google_trends():
         logger.error("job_timeout", job="collect-google-trends")
         return Response(content="Job timed out", status_code=504)
     except Exception as e:
-        logger.error("job_failed", job="collect-google-trends", error=str(e))
+        logger.error("job_failed", job="collect-google-trends", error=str(e),
+                      tb=traceback.format_exc())
         return Response(content=f"Internal error: {e}", status_code=500)
 
 
@@ -108,6 +169,7 @@ async def job_incremental_assign():
     run_id = _create_job_run(collector)
 
     try:
+        run_incremental_assign = _lazy_import("incremental_assign", "run_incremental_assign")
         result = await asyncio.wait_for(
             run_incremental_assign(),
             timeout=JOB_TIMEOUT_SECONDS,
@@ -124,7 +186,8 @@ async def job_incremental_assign():
         return Response(content="Job timed out", status_code=504)
     except Exception as e:
         _finalize_job_run(run_id, start_time, "failed", error_message=str(e))
-        logger.error("job_failed", job="incremental-assign", error=str(e), tb=traceback.format_exc())
+        logger.error("job_failed", job="incremental-assign", error=str(e),
+                      tb=traceback.format_exc())
         return Response(content=f"Internal error: {e}", status_code=500)
 
 
@@ -136,6 +199,7 @@ async def job_nightly_recluster():
     run_id = _create_job_run(collector)
 
     try:
+        run_nightly_recluster = _lazy_import("nightly_recluster", "run_nightly_recluster")
         result = await asyncio.wait_for(
             run_nightly_recluster(),
             timeout=JOB_TIMEOUT_SECONDS,
@@ -151,15 +215,16 @@ async def job_nightly_recluster():
         return Response(content="Job timed out", status_code=504)
     except Exception as e:
         _finalize_job_run(run_id, start_time, "failed", error_message=str(e))
-        logger.error("job_failed", job="nightly-recluster", error=str(e), tb=traceback.format_exc())
+        logger.error("job_failed", job="nightly-recluster", error=str(e),
+                      tb=traceback.format_exc())
         return Response(content=f"Internal error: {e}", status_code=500)
 
 
 @app.post("/jobs/daily-brief")
 async def job_daily_brief():
     """Generate daily brief — triggered daily at 12:00 HKT."""
-    collector = "daily_brief"
     try:
+        generate_daily_brief = _lazy_import("daily_brief", "generate_daily_brief")
         result = await asyncio.wait_for(
             generate_daily_brief(),
             timeout=JOB_TIMEOUT_SECONDS,
@@ -170,5 +235,6 @@ async def job_daily_brief():
         logger.error("job_timeout", job="daily-brief")
         return Response(content="Job timed out", status_code=504)
     except Exception as e:
-        logger.error("job_failed", job="daily-brief", error=str(e), tb=traceback.format_exc())
+        logger.error("job_failed", job="daily-brief", error=str(e),
+                      tb=traceback.format_exc())
         return Response(content=f"Internal error: {e}", status_code=500)
