@@ -14,7 +14,7 @@ Formula:
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
@@ -109,6 +109,7 @@ async def calculate_heat_score(topic_id: str) -> int:
     topic = topic_result.data
 
     # Fetch topic's posts within 48h (mandatory WHERE)
+    cutoff_48h = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
     posts_result = (
         supabase.table("topic_posts")
         .select(
@@ -117,7 +118,7 @@ async def calculate_heat_score(topic_id: str) -> int:
             "published_at, data_quality)"
         )
         .eq("topic_id", topic_id)
-        .gte("raw_posts.published_at", "now() - interval '48 hours'")
+        .gte("raw_posts.published_at", cutoff_48h)
         .execute()
     )
 

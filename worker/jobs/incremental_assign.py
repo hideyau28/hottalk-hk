@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
@@ -142,11 +142,12 @@ async def run_incremental_assign() -> dict[str, Any]:
     stats["embed_stats"] = embed_stats
 
     # === Step 2: Fetch newly embedded posts (48h window) ===
+    cutoff_48h = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
     embedded_result = (
         supabase.table("raw_posts")
         .select("id, platform, title, description, embedding, published_at")
         .eq("processing_status", "embedded")
-        .gte("published_at", "now() - interval '48 hours'")
+        .gte("published_at", cutoff_48h)
         .limit(500)
         .execute()
     )

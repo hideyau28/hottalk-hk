@@ -10,7 +10,7 @@ v3.2: OFFLINE ANALYSIS ONLY.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
@@ -81,11 +81,12 @@ async def run_nightly_recluster() -> dict[str, Any]:
     }
 
     # === Step 1: Fetch all posts with embeddings in 48h window ===
+    cutoff_48h = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
     posts_result = (
         supabase.table("raw_posts")
         .select("id, platform, title, embedding, published_at")
         .not_("embedding", "is", "null")
-        .gte("published_at", "now() - interval '48 hours'")
+        .gte("published_at", cutoff_48h)
         .limit(5000)
         .execute()
     )
