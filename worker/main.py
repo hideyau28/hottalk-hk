@@ -142,6 +142,34 @@ async def debug_imports() -> dict[str, Any]:
     return {"import_errors_at_startup": len(_import_errors), "modules": results}
 
 
+@app.get("/debug/embed-test")
+async def debug_embed_test() -> dict[str, Any]:
+    """Test embedding API with a single string — returns result or exact error."""
+    try:
+        import os
+        from google import genai
+
+        client = genai.Client(api_key=os.environ.get("GOOGLE_AI_API_KEY", "NOT_SET"))
+        response = client.models.embed_content(
+            model="text-embedding-004",
+            contents="Hello world test",
+        )
+        vec = response.embeddings[0].values
+        return {
+            "status": "ok",
+            "vector_dim": len(vec),
+            "first_5": vec[:5],
+            "sdk_version": getattr(genai, "__version__", "unknown"),
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error_type": type(e).__name__,
+            "error_message": str(e),
+            "traceback": traceback.format_exc(),
+        }
+
+
 @app.post("/jobs/collect-google-trends")
 async def job_collect_google_trends():
     try:
