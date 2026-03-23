@@ -171,27 +171,16 @@ async def debug_embed_test() -> dict[str, Any]:
 
 
 @app.get("/debug/list-models")
-async def debug_list_models() -> dict[str, Any]:
-    """List all available Gemini models and their supported methods."""
-    try:
-        import os
-        from google import genai
+async def debug_list_models():
+    """List all available Gemini model names."""
+    from google import genai
+    import os
 
-        client = genai.Client(api_key=os.environ.get("GOOGLE_AI_API_KEY", "NOT_SET"))
-        models = []
-        for model in client.models.list():
-            models.append({
-                "name": model.name,
-                "supported_methods": model.supported_generation_methods,
-            })
-        return {"status": "ok", "count": len(models), "models": models}
-    except Exception as e:
-        return {
-            "status": "error",
-            "error_type": type(e).__name__,
-            "error_message": str(e),
-            "traceback": traceback.format_exc(),
-        }
+    client = genai.Client(api_key=os.environ["GOOGLE_AI_API_KEY"])
+    models = []
+    for model in client.models.list():
+        models.append(model.name)
+    return {"models": models}
 
 
 @app.post("/jobs/collect-google-trends")
