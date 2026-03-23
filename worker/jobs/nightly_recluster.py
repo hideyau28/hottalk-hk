@@ -16,10 +16,7 @@ from typing import Any
 import numpy as np
 import structlog
 
-try:
-    import hdbscan
-except ImportError:
-    hdbscan = None  # type: ignore[assignment]
+hdbscan = None  # v3.2: removed - offline analysis disabled at launch
 
 from utils.supabase_client import get_supabase_client
 
