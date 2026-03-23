@@ -83,7 +83,7 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/jobs/collect-google-trends")
-async def job_collect_google_trends() -> dict | Response:
+async def job_collect_google_trends():
     collector = "google_trends_collector"
     try:
         result = await asyncio.wait_for(
@@ -101,7 +101,7 @@ async def job_collect_google_trends() -> dict | Response:
 
 
 @app.post("/jobs/incremental-assign")
-async def job_incremental_assign() -> dict | Response:
+async def job_incremental_assign():
     """Incremental topic assignment — triggered every 10 min by Vercel Cron."""
     collector = "incremental_assign"
     start_time = datetime.now(timezone.utc)
@@ -129,7 +129,7 @@ async def job_incremental_assign() -> dict | Response:
 
 
 @app.post("/jobs/nightly-recluster")
-async def job_nightly_recluster() -> dict | Response:
+async def job_nightly_recluster():
     """Nightly HDBSCAN recluster — triggered daily at 02:00 HKT."""
     collector = "nightly_recluster"
     start_time = datetime.now(timezone.utc)
@@ -156,7 +156,7 @@ async def job_nightly_recluster() -> dict | Response:
 
 
 @app.post("/jobs/daily-brief")
-async def job_daily_brief() -> dict | Response:
+async def job_daily_brief():
     """Generate daily brief — triggered daily at 12:00 HKT."""
     collector = "daily_brief"
     try:
