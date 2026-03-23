@@ -3,6 +3,5 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-# force rebuild v2
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
-# force rebuild
+# force rebuild v3 — bust pip layer cache for google-genai
