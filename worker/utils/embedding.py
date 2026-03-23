@@ -13,7 +13,7 @@ from utils.supabase_client import get_supabase_client
 
 logger = structlog.get_logger()
 
-EMBEDDING_MODEL = "text-embedding-004"
+EMBEDDING_MODEL = "embedding-001"
 EMBEDDING_DIM = 768
 BATCH_MAX = 100  # Gemini batch limit
 MAX_RETRIES = 3

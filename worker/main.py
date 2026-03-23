@@ -151,7 +151,7 @@ async def debug_embed_test() -> dict[str, Any]:
 
         client = genai.Client(api_key=os.environ.get("GOOGLE_AI_API_KEY", "NOT_SET"))
         response = client.models.embed_content(
-            model="text-embedding-004",
+            model="embedding-001",
             contents="Hello world test",
         )
         vec = response.embeddings[0].values
