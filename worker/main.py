@@ -118,7 +118,7 @@ async def health() -> dict[str, str]:
     try:
         supabase = get_supabase_client()
         supabase.table("scrape_runs").select("id").limit(1).execute()
-        return {"status": "ok", "db": "connected"}
+        return {"status": "ok", "db": "connected", "version": "2026-03-25a"}
     except Exception as e:
         logger.error("health_check_db_failed", error=str(e))
         return {"status": "degraded", "db": "disconnected"}
