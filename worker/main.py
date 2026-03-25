@@ -170,6 +170,80 @@ async def debug_embed_test() -> dict[str, Any]:
         }
 
 
+@app.get("/debug/embed-test-rest")
+async def debug_embed_test_rest() -> dict[str, Any]:
+    """Test embedding via REST API directly — no SDK retry overhead.
+
+    Query params:
+      ?model=gemini-embedding-001 (default)
+    """
+    import os
+
+    import httpx
+    from fastapi import Query
+
+    model = "gemini-embedding-001"
+    api_key = os.environ.get("GOOGLE_AI_API_KEY", "NOT_SET")
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/"
+        f"models/{model}:embedContent?key={api_key}"
+    )
+    payload = {
+        "model": f"models/{model}",
+        "content": {"parts": [{"text": "Hello world test"}]},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            resp = await http.post(url, json=payload)
+        body = resp.json()
+        if resp.status_code == 200:
+            vec = body["embedding"]["values"]
+            return {"status": "ok", "model": model, "vector_dim": len(vec), "first_5": vec[:5]}
+        return {
+            "status": "error",
+            "http_status": resp.status_code,
+            "model": model,
+            "api_key_prefix": api_key[:8] + "...",
+            "body": body,
+        }
+    except Exception as e:
+        return {"status": "error", "error_type": type(e).__name__, "error_message": str(e)}
+
+
+@app.get("/debug/embed-test-v2")
+async def debug_embed_test_v2() -> dict[str, Any]:
+    """Test gemini-embedding-2-preview via REST — separate quota pool."""
+    import os
+
+    import httpx
+
+    model = "gemini-embedding-2-preview"
+    api_key = os.environ.get("GOOGLE_AI_API_KEY", "NOT_SET")
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/"
+        f"models/{model}:embedContent?key={api_key}"
+    )
+    payload = {
+        "model": f"models/{model}",
+        "content": {"parts": [{"text": "Hello world test"}]},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            resp = await http.post(url, json=payload)
+        body = resp.json()
+        if resp.status_code == 200:
+            vec = body["embedding"]["values"]
+            return {"status": "ok", "model": model, "vector_dim": len(vec), "first_5": vec[:5]}
+        return {
+            "status": "error",
+            "http_status": resp.status_code,
+            "model": model,
+            "body": body,
+        }
+    except Exception as e:
+        return {"status": "error", "error_type": type(e).__name__, "error_message": str(e)}
+
+
 @app.get("/debug/list-models")
 async def debug_list_models():
     """List all available Gemini model names."""
