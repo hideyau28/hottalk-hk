@@ -320,13 +320,16 @@ async def run_incremental_assign() -> dict[str, Any]:
 
         # Check new topic conditions
         is_news_trends = "news" in platforms and "google_trends" in platforms
+        # Google Trends keywords are pre-validated by Google as trending —
+        # each keyword IS a topic, allow single-post topic creation
+        is_google_trends_only = platforms == {"google_trends"}
         meets_standard = (
             cluster_size >= MIN_CLUSTER_SIZE
             and len(platforms) >= MIN_PLATFORM_DIVERSITY
         )
         meets_exception = is_news_trends and cluster_size >= 2
 
-        if not (meets_standard or meets_exception):
+        if not (meets_standard or meets_exception or is_google_trends_only):
             # Leave as 'embedded' for next cycle
             continue
 
