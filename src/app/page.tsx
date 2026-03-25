@@ -26,7 +26,9 @@ async function getTopics(platform?: string): Promise<Topic[]> {
     .limit(50);
 
   if (platform) {
-    query = query.contains("platforms_json", { [platform]: {} });
+    // platforms_json stores counts e.g. {"youtube":3,"news":2}
+    // Use ->> to check key exists (not null) instead of @> with empty object
+    query = query.not(`platforms_json->${platform}`, "is", null);
   }
 
   const { data, error } = await query;
@@ -37,7 +39,7 @@ async function getTopics(platform?: string): Promise<Topic[]> {
   }
 
   let topics = (data as Topic[]).filter(
-    (t) => !t.flags?.includes("suspected_spam")
+    (t) => !t.flags?.includes("suspected_spam"),
   );
 
   // Fallback: if < MIN_TOPICS, relax conditions (include declining, source_diversity >= 1)
@@ -55,7 +57,7 @@ async function getTopics(platform?: string): Promise<Topic[]> {
 
     if (fallbackData) {
       const fallbackTopics = (fallbackData as Topic[]).filter(
-        (t) => !t.flags?.includes("suspected_spam") && !existingIds.has(t.id)
+        (t) => !t.flags?.includes("suspected_spam") && !existingIds.has(t.id),
       );
       topics = [...topics, ...fallbackTopics].slice(0, 50);
     }
