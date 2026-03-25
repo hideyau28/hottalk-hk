@@ -1,21 +1,28 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import urllib.parse
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 import structlog
-from pytrends.request import TrendReq
 
 from utils.supabase_client import get_supabase_client
 
 logger = structlog.get_logger()
 
-# SerpApi consecutive failure threshold before switching
-PYTRENDS_FAIL_THRESHOLD = 2
+# Google Trends RSS feed for Hong Kong — no auth required, stable endpoint
+_GOOGLE_TRENDS_RSS_URL = "https://trends.google.com/trending/rss?geo=HK"
+
+_RSS_TIMEOUT = 20  # seconds
+_SERPAPI_TIMEOUT = 30  # seconds
+
+# Namespace used in Google Trends RSS feed
+_HT_NS = "https://trends.google.com/trending/rss"
 
 
 def _normalize_title(title: str) -> str:
@@ -33,8 +40,8 @@ def _content_hash(title: str) -> str:
 async def collect_google_trends() -> dict[str, Any]:
     """Collect Google Trends data for Hong Kong.
 
-    Primary: pytrends library
-    Fallback: SerpApi (after consecutive pytrends failures)
+    Primary: Google Trends RSS feed (no library dependency)
+    Fallback: SerpApi
     """
     supabase = get_supabase_client()
     start_time = datetime.now(timezone.utc)
@@ -47,21 +54,32 @@ async def collect_google_trends() -> dict[str, Any]:
     }).execute()
     run_id: str = run_result.data[0]["id"]
 
+    errors: list[str] = []
+
     try:
-        trends = await _fetch_pytrends()
-        source_used = "pytrends"
+        trends = await _fetch_rss()
+        source_used = "rss"
     except Exception as e:
-        logger.warning("pytrends_failed", error=str(e))
+        rss_error = f"rss: {e}"
+        errors.append(rss_error)
+        logger.warning("google_trends_rss_failed", error=str(e))
         try:
             trends = await _fetch_serpapi()
             source_used = "serpapi"
         except Exception as fallback_err:
-            logger.error("all_trends_sources_failed", error=str(fallback_err))
+            serpapi_error = f"serpapi: {fallback_err}"
+            errors.append(serpapi_error)
+            error_msg = " | ".join(errors)
+            logger.error("all_trends_sources_failed", error=error_msg)
             _finalize_run(supabase, run_id, start_time, {
                 "status": "failed",
-                "error_message": f"pytrends: {e} | serpapi: {fallback_err}",
+                "error_message": error_msg[:1000],
             })
-            return {"status": "failed", "posts_fetched": 0}
+            return {
+                "status": "failed",
+                "posts_fetched": 0,
+                "error": error_msg,
+            }
 
     if not trends:
         _finalize_run(supabase, run_id, start_time, {
@@ -131,51 +149,73 @@ async def collect_google_trends() -> dict[str, Any]:
     }
 
 
-async def _fetch_pytrends() -> list[dict[str, Any]]:
-    """Fetch trending searches from pytrends."""
-    pytrends = TrendReq(hl="zh-HK", geo="HK", timeout=(10, 30))
-    df = pytrends.trending_searches(pn="hong_kong")
+async def _fetch_rss() -> list[dict[str, Any]]:
+    """Fetch trending searches from Google Trends RSS feed.
+
+    Uses the public RSS endpoint which is stable and doesn't require auth.
+    Returns up to ~20 trending items for Hong Kong.
+    """
+    async with httpx.AsyncClient(
+        timeout=_RSS_TIMEOUT,
+        follow_redirects=True,
+        headers={"User-Agent": "HotTalk-HK/1.0"},
+    ) as client:
+        resp = await client.get(_GOOGLE_TRENDS_RSS_URL)
+        resp.raise_for_status()
+
+    root = ET.fromstring(resp.text)
+    channel = root.find("channel")
+    if channel is None:
+        raise ValueError("RSS feed missing <channel> element")
 
     results: list[dict[str, Any]] = []
-    for _, row in df.iterrows():
-        keyword = str(row[0]).strip()
-        if keyword:
-            results.append({
-                "keyword": keyword,
-                "traffic_volume": 0,  # trending_searches 唔提供 traffic volume
-                "related_queries": [],
-            })
 
-    # Try to get traffic volume via realtime trends
-    try:
-        rt_df = pytrends.realtime_trending_searches(pn="HK")
-        if rt_df is not None and not rt_df.empty:
-            traffic_map: dict[str, int] = {}
-            for _, row in rt_df.iterrows():
-                title = str(row.get("title", "")).strip()
-                volume = int(row.get("formattedTraffic", "0").replace(",", "").replace("+", "") or 0)
-                if title:
-                    traffic_map[title.lower()] = volume
+    for item_el in channel.findall("item"):
+        title_el = item_el.find("title")
+        if title_el is None or not title_el.text:
+            continue
 
-            for item in results:
-                key = item["keyword"].lower()
-                if key in traffic_map:
-                    item["traffic_volume"] = traffic_map[key]
-    except Exception:
-        pass  # realtime trends 唔一定 available
+        keyword = title_el.text.strip()
+        if not keyword:
+            continue
+
+        # Parse traffic volume from ht:approx_traffic (e.g. "200,000+")
+        traffic = 0
+        traffic_el = item_el.find(f"{{{_HT_NS}}}approx_traffic")
+        if traffic_el is not None and traffic_el.text:
+            traffic_str = traffic_el.text.replace(",", "").replace("+", "").strip()
+            try:
+                traffic = int(traffic_str)
+            except ValueError:
+                pass
+
+        # Parse related news titles as "related queries"
+        related: list[str] = []
+        news_items = item_el.findall(f"{{{_HT_NS}}}news_item")
+        for news in news_items:
+            news_title = news.find(f"{{{_HT_NS}}}news_item_title")
+            if news_title is not None and news_title.text:
+                related.append(news_title.text.strip())
+
+        results.append({
+            "keyword": keyword,
+            "traffic_volume": traffic,
+            "related_queries": related[:10],
+        })
+
+    if not results:
+        raise ValueError("RSS feed returned 0 items — may be geo-blocked or format changed")
 
     return results
 
 
 async def _fetch_serpapi() -> list[dict[str, Any]]:
     """Fallback: fetch from SerpApi."""
-    import os
-
     api_key = os.environ.get("SERPAPI_KEY")
     if not api_key:
         raise ValueError("SERPAPI_KEY not configured")
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=_SERPAPI_TIMEOUT) as client:
         resp = await client.get(
             "https://serpapi.com/search",
             params={
