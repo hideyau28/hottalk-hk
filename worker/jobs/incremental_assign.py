@@ -38,8 +38,8 @@ def _parse_vector(v: Any) -> list[float] | None:
         return json.loads(v)
     return None
 TOP_ACTIVE_TOPICS_LIMIT = 300
-MIN_CLUSTER_SIZE = 3
-MIN_PLATFORM_DIVERSITY = 2
+MIN_CLUSTER_SIZE = 2        # MVP: lowered from 3 for launch
+MIN_PLATFORM_DIVERSITY = 1  # MVP: lowered from 2 for launch
 CENTROID_FULL_RECOMPUTE_INTERVAL = 20
 
 
