@@ -27,6 +27,16 @@ from utils.topic_status import update_topic_status
 logger = structlog.get_logger()
 
 COSINE_THRESHOLD = 0.80
+
+def _parse_vector(v: Any) -> list[float] | None:
+    """Parse a vector value that may be a list or a JSON string from Supabase."""
+    if v is None:
+        return None
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        return json.loads(v)
+    return None
 TOP_ACTIVE_TOPICS_LIMIT = 300
 MIN_CLUSTER_SIZE = 3
 MIN_PLATFORM_DIVERSITY = 2
@@ -153,6 +163,9 @@ async def run_incremental_assign() -> dict[str, Any]:
     )
 
     new_posts = embedded_result.data
+    # Pre-parse vector strings from Supabase into native lists
+    for p in new_posts:
+        p["embedding"] = _parse_vector(p.get("embedding"))
     if not new_posts:
         logger.info("no_embedded_posts_to_assign")
         return stats
@@ -196,7 +209,7 @@ async def run_incremental_assign() -> dict[str, Any]:
         best_sim = 0.0
 
         for topic in active_topics:
-            centroid = topic.get("centroid")
+            centroid = _parse_vector(topic.get("centroid"))
             if not centroid:
                 continue
 
@@ -252,7 +265,7 @@ async def run_incremental_assign() -> dict[str, Any]:
             continue
 
         old_count = topic.get("centroid_post_count", 0)
-        old_centroid = topic.get("centroid")
+        old_centroid = _parse_vector(topic.get("centroid"))
         if not old_centroid:
             continue
 
@@ -280,9 +293,11 @@ async def run_incremental_assign() -> dict[str, Any]:
                 .execute()
             )
             all_embeds = [
-                r["raw_posts"]["embedding"]
+                parsed
                 for r in all_embeds_result.data
                 if r.get("raw_posts") and r["raw_posts"].get("embedding")
+                for parsed in [_parse_vector(r["raw_posts"]["embedding"])]
+                if parsed is not None
             ]
             if all_embeds:
                 new_centroid = _full_recompute_centroid(all_embeds)
