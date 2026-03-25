@@ -118,7 +118,7 @@ async def health() -> dict[str, str]:
     try:
         supabase = get_supabase_client()
         supabase.table("scrape_runs").select("id").limit(1).execute()
-        return {"status": "ok", "db": "connected", "version": "2026-03-25a"}
+        return {"status": "ok", "db": "connected", "version": "2026-03-26b"}
     except Exception as e:
         logger.error("health_check_db_failed", error=str(e))
         return {"status": "degraded", "db": "disconnected"}
@@ -286,6 +286,106 @@ async def debug_list_models():
     for model in client.models.list():
         models.append(model.name)
     return {"models": models}
+
+
+@app.get("/debug/assign-dry-run")
+async def debug_assign_dry_run() -> dict[str, Any]:
+    """Dry-run incremental assign — reads DB state without writing anything.
+
+    Returns breakdown of what would happen if incremental_assign ran now.
+    """
+    import json as json_mod
+    from datetime import timedelta
+
+    supabase = get_supabase_client()
+    now = datetime.now(timezone.utc)
+    cutoff_48h = (now - timedelta(hours=48)).isoformat()
+    cutoff_24h = (now - timedelta(hours=24)).isoformat()
+
+    result: dict[str, Any] = {}
+
+    # 1. Pending posts (waiting for embedding)
+    pending = supabase.table("raw_posts").select(
+        "id, platform, title", count="exact"
+    ).eq("processing_status", "pending").gte(
+        "published_at", cutoff_48h
+    ).limit(1).execute()
+    result["pending_posts"] = pending.count or 0
+
+    # 2. Embedded posts (ready for assignment)
+    embedded = supabase.table("raw_posts").select(
+        "id, platform, title, processing_status"
+    ).eq("processing_status", "embedded").gte(
+        "published_at", cutoff_48h
+    ).limit(500).execute()
+    embedded_posts = embedded.data or []
+    result["embedded_posts"] = len(embedded_posts)
+
+    # 3. Platform breakdown
+    platform_counts: dict[str, int] = {}
+    for p in embedded_posts:
+        plat = p["platform"]
+        platform_counts[plat] = platform_counts.get(plat, 0) + 1
+    result["platform_breakdown"] = platform_counts
+    result["google_trends_would_create_topics"] = platform_counts.get("google_trends", 0)
+
+    # 4. Check which have embeddings
+    embedded_with_vec = supabase.table("raw_posts").select(
+        "id, platform"
+    ).eq("processing_status", "embedded").gte(
+        "published_at", cutoff_48h
+    ).not_("embedding", "is", "null").limit(500).execute()
+    result["embedded_with_vector"] = len(embedded_with_vec.data or [])
+    result["embedded_without_vector"] = len(embedded_posts) - len(embedded_with_vec.data or [])
+
+    # 5. Active topics pool
+    topics = supabase.table("topics").select(
+        "id, title, status, platforms_json, heat_score"
+    ).in_("status", ["emerging", "rising", "peak"]).gte(
+        "last_updated_at", cutoff_24h
+    ).order("heat_score", desc=True).limit(300).execute()
+    all_topics = topics.data or []
+    non_trends = []
+    for t in all_topics:
+        pj = t.get("platforms_json")
+        if isinstance(pj, str):
+            try:
+                pj = json_mod.loads(pj)
+            except Exception:
+                pj = {}
+        platforms = set(pj.keys()) if isinstance(pj, dict) else set()
+        if platforms != {"google_trends"}:
+            non_trends.append(t)
+    result["active_topics_total"] = len(all_topics)
+    result["active_topics_excl_gtrends"] = len(non_trends)
+    result["active_topics_sample"] = [
+        {"title": t["title"][:50], "status": t["status"], "heat": t.get("heat_score")}
+        for t in non_trends[:5]
+    ]
+
+    # 6. Recently assigned posts (for reference)
+    assigned = supabase.table("raw_posts").select(
+        "id", count="exact"
+    ).eq("processing_status", "assigned").gte(
+        "published_at", cutoff_48h
+    ).limit(1).execute()
+    result["already_assigned_48h"] = assigned.count or 0
+
+    # 7. Diagnosis
+    diag: list[str] = []
+    if result["pending_posts"] > 0:
+        diag.append(f"{result['pending_posts']} posts still pending embedding — embedding step may be failing")
+    if result["embedded_without_vector"] > 0:
+        diag.append(f"{result['embedded_without_vector']} posts marked embedded but have NULL embedding vector!")
+    if result["embedded_posts"] == 0:
+        diag.append("No embedded posts to process — either all assigned or embedding is failing")
+    if result["active_topics_excl_gtrends"] == 0 and result["embedded_posts"] > 0:
+        diag.append("Zero active topics to match against — all posts will go to clustering")
+    if not diag:
+        diag.append("No obvious issues — run /jobs/incremental-assign to see full debug stats")
+    result["diagnosis"] = diag
+
+    return result
 
 
 @app.post("/jobs/collect-google-trends")

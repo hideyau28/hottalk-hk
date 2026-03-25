@@ -166,6 +166,19 @@ async def run_incremental_assign() -> dict[str, Any]:
         "new_topics": 0,
         "unassigned": 0,
         "topics_summarized": [],
+        # Debug detail
+        "debug": {
+            "google_trends_posts": 0,
+            "google_trends_topics_created": 0,
+            "non_trends_posts": 0,
+            "posts_without_embedding": 0,
+            "active_topics_pool": 0,
+            "best_similarities": [],  # top 10 best matches (even below threshold)
+            "clusters_found": 0,
+            "cluster_sizes": [],
+            "clusters_too_small": 0,
+            "platform_breakdown": {},
+        },
     }
 
     # === Step 1: Embed pending posts ===
@@ -194,9 +207,17 @@ async def run_incremental_assign() -> dict[str, Any]:
     stats["posts_processed"] = len(new_posts)
     logger.info("incremental_assign_start", post_count=len(new_posts))
 
+    # Platform breakdown for debug
+    platform_counts: dict[str, int] = {}
+    for p in new_posts:
+        platform_counts[p["platform"]] = platform_counts.get(p["platform"], 0) + 1
+    stats["debug"]["platform_breakdown"] = platform_counts
+
     # === Step 2b: Google Trends — independent track (1 keyword = 1 topic) ===
     google_trends_posts = [p for p in new_posts if p["platform"] == "google_trends"]
     non_trends_posts = [p for p in new_posts if p["platform"] != "google_trends"]
+    stats["debug"]["google_trends_posts"] = len(google_trends_posts)
+    stats["debug"]["non_trends_posts"] = len(non_trends_posts)
 
     topics_to_update: set[str] = set()
     topics_needing_summary: list[str] = []
@@ -241,6 +262,8 @@ async def run_incremental_assign() -> dict[str, Any]:
             topic_id=topic_id,
             title=post.get("title"),
         )
+
+    stats["debug"]["google_trends_topics_created"] = len(google_trends_posts)
 
     # From here on, only process non-Google-Trends posts
     new_posts = non_trends_posts
@@ -291,6 +314,7 @@ async def run_incremental_assign() -> dict[str, Any]:
         if t["_platforms_set"] != {"google_trends"}:
             _non_trends_topics.append(t)
     active_topics = _non_trends_topics
+    stats["debug"]["active_topics_pool"] = len(active_topics)
 
     # === Step 4-6: Match each post to best topic (non-Google-Trends only) ===
     assigned_posts: list[tuple[str, str, float]] = []  # (post_id, topic_id, sim)
@@ -299,10 +323,13 @@ async def run_incremental_assign() -> dict[str, Any]:
     # Track new posts per topic for summary trigger
     new_posts_per_topic: dict[str, int] = {}
 
+    all_best_sims: list[dict[str, Any]] = []  # for debug
+
     for post in new_posts:
         post_embedding = post.get("embedding")
         if not post_embedding:
             unassigned_posts.append(post)
+            stats["debug"]["posts_without_embedding"] += 1
             continue
 
         best_topic_id: str | None = None
@@ -328,6 +355,16 @@ async def run_incremental_assign() -> dict[str, Any]:
             if sim > best_sim:
                 best_sim = sim
                 best_topic_id = topic["id"]
+
+        # Track best similarity for debug (even if below threshold)
+        if best_sim > 0:
+            all_best_sims.append({
+                "post_id": post["id"][:8],
+                "platform": post_platform,
+                "title": (post.get("title") or "")[:40],
+                "best_sim": round(best_sim, 4),
+                "matched": best_sim >= COSINE_THRESHOLD,
+            })
 
         if best_topic_id and best_sim >= COSINE_THRESHOLD:
             # Assign to existing topic
@@ -417,9 +454,17 @@ async def run_incremental_assign() -> dict[str, Any]:
             }
         ).eq("id", tid).execute()
 
+    # Finalize similarity debug — keep top 10 sorted by sim descending
+    all_best_sims.sort(key=lambda x: x["best_sim"], reverse=True)
+    stats["debug"]["best_similarities"] = all_best_sims[:10]
+
     # === Step 7-8: Cluster unassigned posts → potential new topics ===
     valid_unassigned = [p for p in unassigned_posts if p.get("embedding")]
     clusters = _greedy_cluster(valid_unassigned, COSINE_THRESHOLD)
+    stats["debug"]["clusters_found"] = len(clusters)
+    stats["debug"]["cluster_sizes"] = sorted(
+        [len(c) for c in clusters], reverse=True
+    )[:20]
 
     for cluster in clusters:
         platforms = set(p["platform"] for p in cluster)
@@ -433,6 +478,7 @@ async def run_incremental_assign() -> dict[str, Any]:
 
         if not meets_standard:
             # Leave as 'embedded' for next cycle
+            stats["debug"]["clusters_too_small"] += 1
             continue
 
         # Create new topic
