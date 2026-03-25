@@ -5,7 +5,7 @@ Transition rules per HOTTALK-HEAT-SCORE-MATH-v1.0.md Section 6.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
@@ -29,7 +29,7 @@ def _get_percentile_threshold(supabase: Any, percentile: int) -> int:
         supabase.table("topics")
         .select("heat_score")
         .in_("status", ["emerging", "rising", "peak"])
-        .gte("last_updated_at", "now() - interval '24 hours'")
+        .gte("last_updated_at", (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat())
         .order("heat_score")
         .execute()
     )
@@ -73,7 +73,7 @@ async def update_topic_status(topic_id: str) -> str:
         supabase.table("topic_posts")
         .select("id", count="exact")
         .eq("topic_id", topic_id)
-        .gte("assigned_at", "now() - interval '1 hour'")
+        .gte("assigned_at", (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat())
         .execute()
     )
     posts_1h = vel_result.count or 0
