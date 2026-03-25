@@ -244,6 +244,34 @@ async def debug_embed_test_v2() -> dict[str, Any]:
         return {"status": "error", "error_type": type(e).__name__, "error_message": str(e)}
 
 
+@app.get("/debug/generate-test")
+async def debug_generate_test() -> dict[str, Any]:
+    """Test generative API to check if whole API is quota-blocked or just embeddings."""
+    import os
+
+    import httpx
+
+    api_key = os.environ.get("GOOGLE_AI_API_KEY", "NOT_SET")
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/"
+        f"models/gemini-2.0-flash:generateContent?key={api_key}"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": "Say hi in 3 words"}]}],
+        "generationConfig": {"maxOutputTokens": 10},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            resp = await http.post(url, json=payload)
+        body = resp.json()
+        if resp.status_code == 200:
+            text = body["candidates"][0]["content"]["parts"][0]["text"]
+            return {"status": "ok", "model": "gemini-2.0-flash", "response": text}
+        return {"status": "error", "http_status": resp.status_code, "body": body}
+    except Exception as e:
+        return {"status": "error", "error_type": type(e).__name__, "error_message": str(e)}
+
+
 @app.get("/debug/list-models")
 async def debug_list_models():
     """List all available Gemini model names."""
