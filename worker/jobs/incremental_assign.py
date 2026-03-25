@@ -99,10 +99,26 @@ def _full_recompute_centroid(embeddings: list[list[float]]) -> list[float]:
     return np.mean(arr, axis=0).tolist()
 
 
+def _platforms_compatible(a: str, b: str) -> bool:
+    """Check if two platforms are allowed to cluster together.
+
+    News only clusters with news + youtube.
+    All other non-Google-Trends platforms can cluster freely.
+    Google Trends never reaches here (handled separately).
+    """
+    NEWS_COMPATIBLE = {"news", "youtube"}
+    if a == "news" or b == "news":
+        return a in NEWS_COMPATIBLE and b in NEWS_COMPATIBLE
+    return True
+
+
 def _greedy_cluster(
     posts: list[dict[str, Any]], threshold: float
 ) -> list[list[dict[str, Any]]]:
-    """Greedy clustering on unassigned posts by cosine similarity."""
+    """Greedy clustering on unassigned posts by cosine similarity.
+
+    Respects platform compatibility: news only clusters with news/youtube.
+    """
     if not posts:
         return []
 
@@ -117,6 +133,11 @@ def _greedy_cluster(
 
         for j in range(i + 1, len(posts)):
             if assigned[j]:
+                continue
+            # Check platform compatibility before cosine similarity
+            if not _platforms_compatible(
+                posts[i]["platform"], posts[j]["platform"]
+            ):
                 continue
             sim = _cosine_similarity(
                 posts[i]["embedding"], posts[j]["embedding"]
@@ -173,13 +194,83 @@ async def run_incremental_assign() -> dict[str, Any]:
     stats["posts_processed"] = len(new_posts)
     logger.info("incremental_assign_start", post_count=len(new_posts))
 
+    # === Step 2b: Google Trends — independent track (1 keyword = 1 topic) ===
+    google_trends_posts = [p for p in new_posts if p["platform"] == "google_trends"]
+    non_trends_posts = [p for p in new_posts if p["platform"] != "google_trends"]
+
+    topics_to_update: set[str] = set()
+    topics_needing_summary: list[str] = []
+
+    for post in google_trends_posts:
+        topic_id = str(uuid.uuid4())
+        temp_slug = f"temp-{topic_id[:8]}"
+        embedding = post.get("embedding")
+        centroid = embedding if embedding else [0.0] * 768
+
+        supabase.table("topics").insert({
+            "id": topic_id,
+            "slug": temp_slug,
+            "title": post.get("title", "未命名話題"),
+            "status": "emerging",
+            "heat_score": 0,
+            "post_count": 1,
+            "source_count": 1,
+            "centroid": centroid,
+            "centroid_post_count": 1,
+            "platforms_json": json.dumps({"google_trends": 1}),
+        }).execute()
+
+        sim = 1.0 if embedding else 0.0
+        supabase.table("topic_posts").insert({
+            "topic_id": topic_id,
+            "post_id": post["id"],
+            "similarity_score": sim,
+            "assigned_method": "google_trends_direct",
+        }).execute()
+
+        supabase.table("raw_posts").update(
+            {"processing_status": "assigned"}
+        ).eq("id", post["id"]).execute()
+
+        topics_to_update.add(topic_id)
+        topics_needing_summary.append(topic_id)
+        stats["new_topics"] += 1
+
+        logger.info(
+            "google_trends_topic_created",
+            topic_id=topic_id,
+            title=post.get("title"),
+        )
+
+    # From here on, only process non-Google-Trends posts
+    new_posts = non_trends_posts
+
+    if not new_posts:
+        # Only Google Trends posts this cycle — still update heat scores
+        if topics_to_update:
+            for topic_id in topics_to_update:
+                try:
+                    await calculate_heat_score(topic_id)
+                    await update_topic_status(topic_id)
+                except Exception as e:
+                    logger.error("topic_update_failed", topic_id=topic_id, error=str(e))
+            if topics_needing_summary:
+                try:
+                    await summarize_topics(topics_needing_summary)
+                    stats["topics_summarized"] = topics_needing_summary
+                except Exception as e:
+                    logger.error("summarization_failed", error=str(e))
+        logger.info("incremental_assign_complete", **{k: v for k, v in stats.items() if k != "topics_summarized"})
+        return stats
+
     # === Step 3: Fetch top 300 active topics ===
     cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     topics_result = (
         supabase.table("topics")
         .select(
             "id, centroid, centroid_post_count, heat_score, status, "
-            "first_detected_at, last_updated_at, post_count, source_count"
+            "first_detected_at, last_updated_at, post_count, source_count, "
+            "platforms_json"
         )
         .in_("status", ["emerging", "rising", "peak"])
         .gte("last_updated_at", cutoff_24h)
@@ -190,11 +281,20 @@ async def run_incremental_assign() -> dict[str, Any]:
 
     active_topics = topics_result.data
 
-    # === Step 4-6: Match each post to best topic ===
+    # Exclude Google-Trends-only topics from cosine matching pool
+    _non_trends_topics = []
+    for t in active_topics:
+        pj = t.get("platforms_json")
+        if isinstance(pj, str):
+            pj = json.loads(pj)
+        t["_platforms_set"] = set(pj.keys()) if isinstance(pj, dict) else set()
+        if t["_platforms_set"] != {"google_trends"}:
+            _non_trends_topics.append(t)
+    active_topics = _non_trends_topics
+
+    # === Step 4-6: Match each post to best topic (non-Google-Trends only) ===
     assigned_posts: list[tuple[str, str, float]] = []  # (post_id, topic_id, sim)
     unassigned_posts: list[dict[str, Any]] = []
-    topics_to_update: set[str] = set()
-    topics_needing_summary: list[str] = []
 
     # Track new posts per topic for summary trigger
     new_posts_per_topic: dict[str, int] = {}
@@ -208,6 +308,8 @@ async def run_incremental_assign() -> dict[str, Any]:
         best_topic_id: str | None = None
         best_sim = 0.0
 
+        post_platform = post["platform"]
+
         for topic in active_topics:
             centroid = _parse_vector(topic.get("centroid"))
             if not centroid:
@@ -215,6 +317,11 @@ async def run_incremental_assign() -> dict[str, Any]:
 
             # Cross-time event protection
             if _should_force_new_topic(topic):
+                continue
+
+            # News posts only match topics with news or youtube content
+            topic_platforms = topic.get("_platforms_set", set())
+            if post_platform == "news" and not topic_platforms & {"news", "youtube"}:
                 continue
 
             sim = _cosine_similarity(post_embedding, centroid)
@@ -318,18 +425,13 @@ async def run_incremental_assign() -> dict[str, Any]:
         platforms = set(p["platform"] for p in cluster)
         cluster_size = len(cluster)
 
-        # Check new topic conditions
-        is_news_trends = "news" in platforms and "google_trends" in platforms
-        # Google Trends keywords are pre-validated by Google as trending —
-        # each keyword IS a topic, allow single-post topic creation
-        is_google_trends_only = platforms == {"google_trends"}
+        # Check new topic conditions (Google Trends already handled above)
         meets_standard = (
             cluster_size >= MIN_CLUSTER_SIZE
             and len(platforms) >= MIN_PLATFORM_DIVERSITY
         )
-        meets_exception = is_news_trends and cluster_size >= 2
 
-        if not (meets_standard or meets_exception or is_google_trends_only):
+        if not meets_standard:
             # Leave as 'embedded' for next cycle
             continue
 
