@@ -161,6 +161,7 @@ async def run_incremental_assign() -> dict[str, Any]:
     logger.info("incremental_assign_start", post_count=len(new_posts))
 
     # === Step 3: Fetch top 300 active topics ===
+    cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     topics_result = (
         supabase.table("topics")
         .select(
@@ -168,7 +169,7 @@ async def run_incremental_assign() -> dict[str, Any]:
             "first_detected_at, last_updated_at, post_count, source_count"
         )
         .in_("status", ["emerging", "rising", "peak"])
-        .gte("last_updated_at", "now() - interval '24 hours'")
+        .gte("last_updated_at", cutoff_24h)
         .order("heat_score", desc=True)
         .limit(TOP_ACTIVE_TOPICS_LIMIT)
         .execute()
