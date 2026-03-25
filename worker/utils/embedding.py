@@ -30,6 +30,7 @@ async def _embed_batch(client: genai.Client, texts: list[str]) -> list[list[floa
         client.models.embed_content,
         model=EMBEDDING_MODEL,
         contents=texts,
+        config={"output_dimensionality": EMBEDDING_DIM},
     )
     return [e.values for e in response.embeddings]
 
@@ -66,6 +67,7 @@ async def _embed_single_fallback(
                 client.models.embed_content,
                 model=EMBEDDING_MODEL,
                 contents=text,
+                config={"output_dimensionality": EMBEDDING_DIM},
             )
             results.append(response.embeddings[0].values)
         except Exception as e:

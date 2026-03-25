@@ -153,6 +153,7 @@ async def debug_embed_test() -> dict[str, Any]:
         response = client.models.embed_content(
             model="gemini-embedding-001",
             contents="Hello world test",
+            config={"output_dimensionality": 768},
         )
         vec = response.embeddings[0].values
         return {
@@ -191,6 +192,7 @@ async def debug_embed_test_rest() -> dict[str, Any]:
     payload = {
         "model": f"models/{model}",
         "content": {"parts": [{"text": "Hello world test"}]},
+        "outputDimensionality": 768,
     }
     try:
         async with httpx.AsyncClient(timeout=15) as http:
@@ -226,6 +228,7 @@ async def debug_embed_test_v2() -> dict[str, Any]:
     payload = {
         "model": f"models/{model}",
         "content": {"parts": [{"text": "Hello world test"}]},
+        "outputDimensionality": 768,
     }
     try:
         async with httpx.AsyncClient(timeout=15) as http:
