@@ -326,6 +326,7 @@ async def debug_assign_dry_run() -> dict[str, Any]:
             platform_counts[plat] = platform_counts.get(plat, 0) + 1
         result["platform_breakdown"] = platform_counts
         result["google_trends_would_create_topics"] = platform_counts.get("google_trends", 0)
+        result["youtube_would_create_topics"] = platform_counts.get("youtube", 0)
 
         # 4. Check which have embeddings (IS NOT NULL filter)
         embedded_with_vec = supabase.table("raw_posts").select(

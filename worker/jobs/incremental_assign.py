@@ -467,9 +467,68 @@ async def run_incremental_assign() -> dict[str, Any]:
     all_best_sims.sort(key=lambda x: x["best_sim"], reverse=True)
     stats["debug"]["best_similarities"] = all_best_sims[:10]
 
+    # === Step 6b: YouTube standalone topics ===
+    # YouTube trending videos are pre-validated as popular.
+    # After cosine matching fails, create standalone topics (same as Google Trends).
+    youtube_unassigned = [p for p in unassigned_posts if p["platform"] == "youtube"]
+    remaining_unassigned = [p for p in unassigned_posts if p["platform"] != "youtube"]
+    stats["debug"]["youtube_unassigned"] = len(youtube_unassigned)
+
+    for post in youtube_unassigned:
+        try:
+            topic_id = str(uuid.uuid4())
+            temp_slug = f"temp-{topic_id[:8]}"
+            embedding = post.get("embedding")
+            centroid = embedding if embedding else [0.0] * 768
+
+            supabase.table("topics").insert({
+                "id": topic_id,
+                "slug": temp_slug,
+                "title": post.get("title", "未命名話題"),
+                "status": "emerging",
+                "heat_score": 0,
+                "post_count": 1,
+                "source_count": 1,
+                "centroid": centroid,
+                "centroid_post_count": 1,
+                "platforms_json": {"youtube": 1},
+            }).execute()
+
+            sim = 1.0 if embedding else 0.0
+            supabase.table("topic_posts").insert({
+                "topic_id": topic_id,
+                "post_id": post["id"],
+                "similarity_score": sim,
+                "assigned_method": "youtube_trending_direct",
+            }).execute()
+
+            supabase.table("raw_posts").update(
+                {"processing_status": "assigned"}
+            ).eq("id", post["id"]).execute()
+
+            topics_to_update.add(topic_id)
+            topics_needing_summary.append(topic_id)
+            stats["new_topics"] += 1
+
+            logger.info(
+                "youtube_topic_created",
+                topic_id=topic_id,
+                title=post.get("title"),
+            )
+        except Exception as e:
+            logger.error(
+                "youtube_topic_creation_failed",
+                post_id=post["id"],
+                title=post.get("title"),
+                error=str(e),
+            )
+
+    stats["debug"]["youtube_topics_created"] = len(youtube_unassigned)
+    unassigned_posts = remaining_unassigned
+
     # === Step 7-8: Cluster unassigned posts → potential new topics ===
-    # Use lower threshold for clustering — cross-platform posts (YouTube title vs
-    # news headline) on the same topic often land 0.65-0.79 similarity.
+    # Use lower threshold for clustering — cross-platform posts (news + LIHKG)
+    # on the same topic often land 0.65-0.79 similarity.
     valid_unassigned = [p for p in unassigned_posts if p.get("embedding")]
     stats["debug"]["unassigned_count"] = len(valid_unassigned)
     stats["debug"]["unassigned_platforms"] = {}
