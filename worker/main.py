@@ -327,14 +327,29 @@ async def debug_assign_dry_run() -> dict[str, Any]:
         result["platform_breakdown"] = platform_counts
         result["google_trends_would_create_topics"] = platform_counts.get("google_trends", 0)
 
-        # 4. Check which have embeddings (use neq instead of not_)
+        # 4. Check which have embeddings (IS NOT NULL filter)
         embedded_with_vec = supabase.table("raw_posts").select(
             "id"
         ).eq("processing_status", "embedded").gte(
             "published_at", cutoff_48h
-        ).neq("embedding", "null").limit(500).execute()
+        ).filter("embedding", "not.is", "null").limit(500).execute()
         result["embedded_with_vector"] = len(embedded_with_vec.data or [])
         result["embedded_without_vector"] = len(embedded_posts) - result["embedded_with_vector"]
+
+        # 4b. Per-platform per-status breakdown (debug why GT posts may not be embedded)
+        status_breakdown: dict[str, dict[str, int]] = {}
+        for status in ["pending", "embedded", "assigned", "noise"]:
+            status_posts = supabase.table("raw_posts").select(
+                "platform"
+            ).eq("processing_status", status).gte(
+                "published_at", cutoff_48h
+            ).limit(2000).execute()
+            for sp in (status_posts.data or []):
+                plat = sp["platform"]
+                if plat not in status_breakdown:
+                    status_breakdown[plat] = {}
+                status_breakdown[plat][status] = status_breakdown[plat].get(status, 0) + 1
+        result["platform_status_breakdown"] = status_breakdown
 
         # 5. Active topics pool
         topics = supabase.table("topics").select(

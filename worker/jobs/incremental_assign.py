@@ -27,6 +27,7 @@ from utils.topic_status import update_topic_status
 logger = structlog.get_logger()
 
 COSINE_THRESHOLD = 0.80
+CLUSTER_THRESHOLD = 0.65   # Lower threshold for greedy clustering of unassigned posts
 
 def _parse_vector(v: Any) -> list[float] | None:
     """Parse a vector value that may be a list or a JSON string from Supabase."""
@@ -223,45 +224,53 @@ async def run_incremental_assign() -> dict[str, Any]:
     topics_needing_summary: list[str] = []
 
     for post in google_trends_posts:
-        topic_id = str(uuid.uuid4())
-        temp_slug = f"temp-{topic_id[:8]}"
-        embedding = post.get("embedding")
-        centroid = embedding if embedding else [0.0] * 768
+        try:
+            topic_id = str(uuid.uuid4())
+            temp_slug = f"temp-{topic_id[:8]}"
+            embedding = post.get("embedding")
+            centroid = embedding if embedding else [0.0] * 768
 
-        supabase.table("topics").insert({
-            "id": topic_id,
-            "slug": temp_slug,
-            "title": post.get("title", "未命名話題"),
-            "status": "emerging",
-            "heat_score": 0,
-            "post_count": 1,
-            "source_count": 1,
-            "centroid": centroid,
-            "centroid_post_count": 1,
-            "platforms_json": json.dumps({"google_trends": 1}),
-        }).execute()
+            supabase.table("topics").insert({
+                "id": topic_id,
+                "slug": temp_slug,
+                "title": post.get("title", "未命名話題"),
+                "status": "emerging",
+                "heat_score": 0,
+                "post_count": 1,
+                "source_count": 1,
+                "centroid": centroid,
+                "centroid_post_count": 1,
+                "platforms_json": json.dumps({"google_trends": 1}),
+            }).execute()
 
-        sim = 1.0 if embedding else 0.0
-        supabase.table("topic_posts").insert({
-            "topic_id": topic_id,
-            "post_id": post["id"],
-            "similarity_score": sim,
-            "assigned_method": "google_trends_direct",
-        }).execute()
+            sim = 1.0 if embedding else 0.0
+            supabase.table("topic_posts").insert({
+                "topic_id": topic_id,
+                "post_id": post["id"],
+                "similarity_score": sim,
+                "assigned_method": "google_trends_direct",
+            }).execute()
 
-        supabase.table("raw_posts").update(
-            {"processing_status": "assigned"}
-        ).eq("id", post["id"]).execute()
+            supabase.table("raw_posts").update(
+                {"processing_status": "assigned"}
+            ).eq("id", post["id"]).execute()
 
-        topics_to_update.add(topic_id)
-        topics_needing_summary.append(topic_id)
-        stats["new_topics"] += 1
+            topics_to_update.add(topic_id)
+            topics_needing_summary.append(topic_id)
+            stats["new_topics"] += 1
 
-        logger.info(
-            "google_trends_topic_created",
-            topic_id=topic_id,
-            title=post.get("title"),
-        )
+            logger.info(
+                "google_trends_topic_created",
+                topic_id=topic_id,
+                title=post.get("title"),
+            )
+        except Exception as e:
+            logger.error(
+                "google_trends_topic_creation_failed",
+                post_id=post["id"],
+                title=post.get("title"),
+                error=str(e),
+            )
 
     stats["debug"]["google_trends_topics_created"] = len(google_trends_posts)
 
@@ -459,8 +468,16 @@ async def run_incremental_assign() -> dict[str, Any]:
     stats["debug"]["best_similarities"] = all_best_sims[:10]
 
     # === Step 7-8: Cluster unassigned posts → potential new topics ===
+    # Use lower threshold for clustering — cross-platform posts (YouTube title vs
+    # news headline) on the same topic often land 0.65-0.79 similarity.
     valid_unassigned = [p for p in unassigned_posts if p.get("embedding")]
-    clusters = _greedy_cluster(valid_unassigned, COSINE_THRESHOLD)
+    stats["debug"]["unassigned_count"] = len(valid_unassigned)
+    stats["debug"]["unassigned_platforms"] = {}
+    for p in valid_unassigned:
+        plat = p["platform"]
+        stats["debug"]["unassigned_platforms"][plat] = stats["debug"]["unassigned_platforms"].get(plat, 0) + 1
+    stats["debug"]["cluster_threshold_used"] = CLUSTER_THRESHOLD
+    clusters = _greedy_cluster(valid_unassigned, CLUSTER_THRESHOLD)
     stats["debug"]["clusters_found"] = len(clusters)
     stats["debug"]["cluster_sizes"] = sorted(
         [len(c) for c in clusters], reverse=True
