@@ -240,7 +240,7 @@ async def run_incremental_assign() -> dict[str, Any]:
                 "source_count": 1,
                 "centroid": centroid,
                 "centroid_post_count": 1,
-                "platforms_json": json.dumps({"google_trends": 1}),
+                "platforms_json": {"google_trends": 1},
             }).execute()
 
             sim = 1.0 if embedding else 0.0
@@ -517,9 +517,7 @@ async def run_incremental_assign() -> dict[str, Any]:
                 "source_count": len(platforms),
                 "centroid": centroid,
                 "centroid_post_count": cluster_size,
-                "platforms_json": json.dumps(
-                    {p: sum(1 for x in cluster if x["platform"] == p) for p in platforms}
-                ),
+                "platforms_json": {p: sum(1 for x in cluster if x["platform"] == p) for p in platforms},
             }
         ).execute()
 
@@ -579,16 +577,14 @@ async def run_incremental_assign() -> dict[str, Any]:
                     {
                         "post_count": post_count,
                         "source_count": len(platforms),
-                        "platforms_json": json.dumps(
-                            {
-                                p: sum(
-                                    1
-                                    for r in tp_result.data
-                                    if r.get("raw_posts", {}).get("platform") == p
-                                )
-                                for p in platforms
-                            }
-                        ),
+                        "platforms_json": {
+                            p: sum(
+                                1
+                                for r in tp_result.data
+                                if r.get("raw_posts", {}).get("platform") == p
+                            )
+                            for p in platforms
+                        },
                         "last_updated_at": now_iso,
                     }
                 ).eq("id", topic_id).execute()
