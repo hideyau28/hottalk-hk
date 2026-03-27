@@ -31,6 +31,37 @@ interface YouTubeResponse {
   items: YouTubeVideo[];
 }
 
+interface YouTubeChannel {
+  id: string;
+  snippet: { country?: string };
+}
+
+interface YouTubeChannelsResponse {
+  items: YouTubeChannel[];
+}
+
+/** Batch-fetch channel countries. channels.list accepts up to 50 IDs. */
+async function fetchHKChannelIds(
+  channelIds: string[],
+  apiKey: string,
+): Promise<Set<string>> {
+  const hkChannels = new Set<string>();
+  // Batch in chunks of 50 (YouTube API limit)
+  for (let i = 0; i < channelIds.length; i += 50) {
+    const batch = channelIds.slice(i, i + 50);
+    const url = `${YOUTUBE_API_BASE}/channels?part=snippet&id=${batch.join(",")}&key=${apiKey}`;
+    const resp = await fetch(url);
+    if (!resp.ok) continue;
+    const data: YouTubeChannelsResponse = await resp.json();
+    for (const ch of data.items ?? []) {
+      if (ch.snippet.country === "HK") {
+        hkChannels.add(ch.id);
+      }
+    }
+  }
+  return hkChannels;
+}
+
 Deno.serve(async () => {
   const startTime = Date.now();
   const supabase = getServiceClient();
@@ -76,7 +107,16 @@ Deno.serve(async () => {
     }
 
     const data: YouTubeResponse = await resp.json();
-    const videos = data.items ?? [];
+    const allVideos = data.items ?? [];
+
+    // Filter: only keep videos from HK channels
+    const uniqueChannelIds = [
+      ...new Set(allVideos.map((v) => v.snippet.channelId)),
+    ];
+    const hkChannelIds = await fetchHKChannelIds(uniqueChannelIds, apiKey);
+    const videos = allVideos.filter((v) =>
+      hkChannelIds.has(v.snippet.channelId),
+    );
 
     // Fetch previous view counts for delta calculation
     const platformIds = videos.map((v) => `yt_${v.id}`);
@@ -152,6 +192,8 @@ Deno.serve(async () => {
 
     return jsonResponse({
       collector: "youtube_collector",
+      trending_total: allVideos.length,
+      hk_channels: hkChannelIds.size,
       posts_fetched: videos.length,
       posts_new: Math.max(0, postsNew),
       duration_ms: Date.now() - startTime,
