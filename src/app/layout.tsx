@@ -13,6 +13,22 @@ export const metadata: Metadata = {
     siteName: "熱話 HotTalk HK",
     locale: "zh_HK",
     type: "website",
+    url: "https://hottalk.hk",
+    images: [
+      {
+        url: "https://hottalk.hk/api/og",
+        width: 1200,
+        height: 630,
+        alt: "熱話 HotTalk HK — 一頁睇晒，全港熱話",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "熱話 HotTalk HK — 一頁睇晒，全港熱話",
+    description:
+      "香港首個免費跨平台社交媒體熱點聚合平台。AI 自動歸納 YouTube、連登、新聞、Google Trends 熱話。",
+    images: ["https://hottalk.hk/api/og"],
   },
   robots: "index, follow",
 };

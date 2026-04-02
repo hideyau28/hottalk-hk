@@ -11,6 +11,25 @@ export const revalidate = 3600;
 export const metadata: Metadata = {
   title: "今日懶人包",
   description: "每日精選全港 Top 5 熱話，一分鐘睇完今日重點。",
+  openGraph: {
+    title: "今日懶人包 | 熱話 HotTalk HK",
+    description: "每日精選全港 Top 5 熱話，一分鐘睇完今日重點。",
+    url: "https://hottalk.hk/brief",
+    images: [
+      {
+        url: "https://hottalk.hk/api/og",
+        width: 1200,
+        height: 630,
+        alt: "今日懶人包 — 全港 Top 5 熱話",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "今日懶人包 | 熱話 HotTalk HK",
+    description: "每日精選全港 Top 5 熱話，一分鐘睇完今日重點。",
+    images: ["https://hottalk.hk/api/og"],
+  },
 };
 
 function formatDate(dateStr: string): string {
