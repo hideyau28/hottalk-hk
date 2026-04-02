@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { verifyCronRequest } from "@/lib/verify-cron";
 
-const CRON_SECRET = process.env.CRON_SECRET ?? "";
 const WORKER_URL = process.env.WORKER_URL ?? "";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
@@ -14,8 +14,9 @@ const EDGE_FUNCTIONS = [
 export const maxDuration = 120;
 
 export async function GET(request: NextRequest) {
-  if (request.headers.get("authorization") !== `Bearer ${CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const authError = await verifyCronRequest(request);
+  if (authError) {
+    return NextResponse.json({ error: authError }, { status: 401 });
   }
 
   if (!WORKER_URL) {
@@ -80,4 +81,9 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({ triggered: results });
+}
+
+// QStash sends POST requests
+export async function POST(request: NextRequest) {
+  return GET(request);
 }
